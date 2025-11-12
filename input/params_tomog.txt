@@ -1,0 +1,43 @@
+# Example tomography parameter file (params_example.tomog)
+# Lines are positional. Blank lines and lines starting with # are ignored.
+# New fields: instrumentRes lineParamFile ; velStart velEnd obsFileType
+# After line 13: each line => obs_filename  JD  velR
+# Units: angles in degrees, velocities km/s, dates JD.
+
+#0 inclination  vsini  period  pOmega
+# pOmega: power-law index for differential rotation, Ω(r) = Ω_ref × (r/r0)^pOmega
+#   pOmega = 0.0  : rigid rotation
+#   pOmega = -0.5 : Keplerian (solar-type for disk)
+#   pOmega = -1.0 : constant angular momentum
+# Note: period refers to reference rotation period at r = r0 (typically set in integrator)
+60.0  25.0  1.2345  -1.5
+#1 mass  radius
+1.0  1.0
+#2 nRingsStellarGrid
+60
+#3 targetForm  targetValue  numIterations   (C=chi^2 target, E=entropy target)
+C  1.0  0
+#4 test_aim (convergence threshold for Test statistic)
+1e-3
+#5 lineAmpConst  k_QU  enableV  enableQU
+-0.5  1.0  1  1
+#6 initMagFromFile  initMagGeomFile (legacy flag + filename)
+0  none
+#7 fitBri  chiScaleI  brightEntScale
+0  1.0  1.0
+#8 fEntropyBright  defaultBright  maximumBright
+1  1.0  2.0
+#9 initBrightFromFile  initBrightFile
+0  none
+#10 estimateStrenght (legacy line strength fitting flag)
+0
+#11 instrumentRes  lineParamFile
+5.0  lines.txt
+#12 velStart  velEnd  obsFileType
+-300.0  300.0  lsd_i
+#13 jDateRef
+2450000.0
+
+#14+ observation entries: filename  JD  velR
+obs/phase001.lsd  2450000.10  10.0
+obs/phase002.lsd  2450000.20  -5.0

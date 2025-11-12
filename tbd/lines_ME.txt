@@ -1,0 +1,2 @@
+# wl0 g eta0 beta widthGauss widthLorentz_ratio [fI] [fV] [emitAmp] [emitWidthScale]
+656.28 1.0 1.0 1.4 3.0 0.1 1.0 1.0 0.6 0.7
