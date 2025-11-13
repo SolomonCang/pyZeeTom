@@ -104,14 +104,24 @@ class SpotCollection:
         
         返回:
         - 演化后的 Spot 对象列表
+        
+        注意:
+        - 对于 r=0 的spot，不进行旋转（保持在原位）
+        - 对于 r>0 且 pOmega<0 的情况，使用 max(r, 1e-10) 避免数值问题
         """
         time_days = phase * self.period
         evolved_spots = []
 
         for spot in self.spots:
-            omega_spot = self.omega_ref * (spot.r / self.r0)**self.pOmega
-            delta_phi = omega_spot * time_days
-            phi_new = (spot.phi_initial + delta_phi) % (2 * np.pi)
+            # 处理 r=0 的特殊情况：中心spot不旋转
+            if spot.r < 1e-10:
+                phi_new = spot.phi_initial
+            else:
+                # 使用 max 避免 r 极小时的数值问题
+                r_safe = max(spot.r, 1e-10)
+                omega_spot = self.omega_ref * (r_safe / self.r0)**self.pOmega
+                delta_phi = omega_spot * time_days
+                phi_new = (spot.phi_initial + delta_phi) % (2 * np.pi)
 
             # 创建新的 Spot 对象（保留其他属性）
             evolved_spot = Spot(

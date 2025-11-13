@@ -3,9 +3,37 @@ import numpy as np
 c = 2.99792458e5
 
 
+def compute_phase_from_jd(jd, jd_ref, period):
+    """计算观测相位（rotation phase）
+    
+    Parameters
+    ----------
+    jd : float or array-like
+        观测的 Julian Date（Heliocentric Julian Date）
+    jd_ref : float
+        参考时刻的 Julian Date（HJD0）
+    period : float
+        自转周期（天）
+        
+    Returns
+    -------
+    phase : float or ndarray
+        相位，phase = (jd - jd_ref) / period
+        对于刚体转动，phase 直接对应观测角度偏移：Δφ = 2π × phase
+        对于差速转动，每个环的相位演化由各自的角速度决定
+    """
+    return (np.asarray(jd) - float(jd_ref)) / float(period)
+
+
 class readParamsTomog:
-    # This holds the input model parameters for tomography (adapted from legacy ZDI)
-    def __init__(self, inParamsName):
+    """读取tomography参数文件
+    
+    支持两种网格定义方式：
+    1. 直接指定 Vmax（行1第3列非零）：不依赖 radius/vsini/inclination
+    2. 使用 radius + r_out + vsini + inclination 计算 Vmax
+    """
+
+    def __init__(self, inParamsName, verbose=1):
         # Read in the model and control parameters
         fInZDI = open(inParamsName, 'r')
         self.fnames = np.array([])
@@ -15,6 +43,7 @@ class readParamsTomog:
         # New defaults for tomography workflow
         self.lineParamFile = 'lines.txt'  # path to line model parameters
         self.obsFileType = 'auto'  # observation format hint for readObs
+        self.enable_stellar_occultation = 0  # 默认关闭恒星遮挡
         i = 0
         for inLine in fInZDI:
             if (inLine.strip() == ''):  # skip blank lines
@@ -22,16 +51,24 @@ class readParamsTomog:
             # check for comments (ignoring white-space)
             if (inLine.strip()[0] != '#'):
                 if (i == 0):
-                    self.inclination = float(inLine.split()[0])
-                    self.vsini = float(inLine.split()[1])
-                    self.period = float(inLine.split()[2])
-                    self.pOmega = float(inLine.split(
-                    )[3])  # power index for differential rotation: Ω(r) ∝ r^p
+                    # 行0: inclination vsini period pOmega
+                    parts = inLine.split()
+                    self.inclination = float(parts[0])
+                    self.vsini = float(parts[1])
+                    self.period = float(parts[2])
+                    self.pOmega = float(parts[3])
                     # Legacy alias for backward compatibility
                     self.dOmega = self.pOmega
                 elif (i == 1):
-                    self.mass = float(inLine.split()[0])
-                    self.radius = float(inLine.split()[1])
+                    # 行1: mass radius [Vmax] [r_out] [enable_occultation]
+                    # Vmax非零时使用Vmax定义网格，否则从radius+r_out+vsini+inclination计算
+                    parts = inLine.split()
+                    self.mass = float(parts[0])
+                    self.radius = float(parts[1])
+                    self.Vmax = float(parts[2]) if len(parts) > 2 else 0.0
+                    self.r_out = float(parts[3]) if len(parts) > 3 else 0.0
+                    self.enable_stellar_occultation = int(
+                        parts[4]) if len(parts) > 4 else 0
                 elif (i == 2):
                     self.nRingsStellarGrid = int(inLine.split()[0])
                 elif (i == 3):
@@ -41,7 +78,7 @@ class readParamsTomog:
                 elif (i == 4):
                     self.test_aim = float(inLine.split()[0])
                 elif (i == 5):
-                    # Line model configuration (repurposed from legacy magnetic settings)
+                    # Line model configuration
                     # Format: ampConst  k_QU  enableV  enableQU
                     parts = inLine.split()
                     self.lineAmpConst = float(parts[0])
@@ -65,8 +102,10 @@ class readParamsTomog:
                 elif (i == 10):
                     self.estimateStrenght = int(inLine.split()[0])
                 elif (i == 11):
+                    # 行11: spectralResolution lineParamFile
+                    # spectralResolution 现为分辨率（如65000），将转换为FWHM (km/s)
                     parts = inLine.split()
-                    self.instrumentRes = float(parts[0])
+                    self.spectralResolution = float(parts[0])
                     # optional: path to line parameter file (e.g., lines.txt)
                     if len(parts) >= 2:
                         self.lineParamFile = parts[1]
@@ -97,8 +136,63 @@ class readParamsTomog:
                             self.velRs[self.numObs - 1]))
 
                 i += 1
+
+        # 计算派生参数
         self.incRad = self.inclination / 180. * np.pi
-        self.velEq = self.vsini / np.sin(self.incRad)
+        self.velEq = self.vsini / np.sin(self.incRad) if np.sin(
+            self.incRad) > 1e-6 else 0.0
+
+        # 确定网格速度范围（两种方式二选一）
+        if abs(self.Vmax) > 1e-6:
+            # 方式1: 直接使用 Vmax
+            if verbose:
+                print(f"[Grid] Using direct Vmax = {self.Vmax:.2f} km/s")
+        else:
+            # 方式2: 从 radius + r_out + vsini + inclination 计算
+            if self.r_out > 0 and self.radius > 0:
+                # 盘外边缘速度（刚体转动）：v(r_out) = veq * r_out / radius
+                # 考虑差速：v(r) = veq * (r/radius)^(pOmega+1)
+                r_ratio = self.r_out / self.radius
+                self.Vmax = self.velEq * (r_ratio**(self.pOmega + 1.0))
+                if verbose:
+                    print(
+                        f"[Grid] Computed Vmax = {self.Vmax:.2f} km/s from r_out={self.r_out:.2f}R*, vsini={self.vsini:.2f} km/s"
+                    )
+            else:
+                # 回退：使用 vsini
+                self.Vmax = self.vsini
+                if verbose:
+                    print(
+                        f"[Grid] Warning: r_out not specified, using Vmax = vsini = {self.Vmax:.2f} km/s"
+                    )
+
+        # 计算同步轨道半径并输出
+        if self.mass > 0 and self.period > 0:
+            # Kepler第三定律: a^3 = G*M*P^2/(4π^2)
+            # 以太阳质量、天、太阳半径为单位
+            G_solar = 4 * np.pi**2  # AU^3 / (M_sun * year^2)
+            P_year = self.period / 365.25
+            a_AU = (G_solar * self.mass * P_year**2)**(1. / 3.)
+            a_Rsun = a_AU * 215.032  # 1 AU = 215.032 R_sun
+            self.corotation_radius = a_Rsun / self.radius  # 以恒星半径为单位
+            if verbose:
+                print(
+                    f"[Corotation] Synchronous orbit at r_sync = {self.corotation_radius:.3f} R* ({a_Rsun:.3f} R_sun)"
+                )
+        else:
+            self.corotation_radius = None
+
+        # 将光谱分辨率转换为 FWHM (km/s)
+        # 需要结合谱线文件中的 wl0，此处先记录，实际转换在读取谱线后进行
+        self.instrumentRes = None  # 将在读取谱线后设置
+
+        # 计算每个观测的相位（基于 jDateRef 和 period）
+        if hasattr(self, 'jDateRef') and hasattr(self, 'period'):
+            self.phases = compute_phase_from_jd(self.jDates, self.jDateRef,
+                                                self.period)
+        else:
+            # 如果没有 jDateRef，则相位设为 None
+            self.phases = None
 
         # Preserve legacy attribute normalization; tolerated but not required in new flow
         if hasattr(self, 'magGeomType'):
@@ -110,9 +204,52 @@ class readParamsTomog:
                        ).format(self.magGeomType))
             self.magGeomType = magGeomType
 
+    def compute_instrument_fwhm(self, wl0, verbose=1):
+        """根据光谱分辨率和中心波长计算仪器FWHM (km/s)
+        
+        Parameters
+        ----------
+        wl0 : float
+            谱线中心波长 (Angstrom)
+        verbose : int
+            是否输出信息
+        
+        Returns
+        -------
+        fwhm_kms : float
+            仪器FWHM (km/s)
+        """
+        if self.spectralResolution > 0:
+            # FWHM (km/s) = c / R
+            fwhm_kms = c / self.spectralResolution
+            self.instrumentRes = fwhm_kms
+            if verbose:
+                print(
+                    f"[Instrument] R = {self.spectralResolution:.0f}, FWHM = {fwhm_kms:.3f} km/s at wl0={wl0:.2f}Å"
+                )
+            return fwhm_kms
+        else:
+            if verbose:
+                print(
+                    "[Instrument] Warning: spectralResolution not set, no convolution will be applied"
+                )
+            self.instrumentRes = 0.0
+            return 0.0
+
     def calcCycles(self, verbose=1):
-        # Calculate rotation cycle/phase from the period and Julian dates
-        self.cycleList = (self.jDates - self.jDateRef) / self.period
+        """计算观测相位/周期数（已在 __init__ 中计算，此方法保持向后兼容）
+        
+        统一使用 self.phases 作为主属性，self.cycleList 作为别名。
+        """
+        # cycleList 是 phases 的向后兼容别名
+        if hasattr(self, 'phases') and self.phases is not None:
+            self.cycleList = self.phases
+        else:
+            # 如果 __init__ 未计算 phases（例如缺少 jDateRef），则在此计算
+            self.cycleList = compute_phase_from_jd(self.jDates, self.jDateRef,
+                                                   self.period)
+            self.phases = self.cycleList
+
         if ((self.pOmega != 0.) & (verbose == 1)):
             # Note: Original dOmega interpretation as angular shear rate is deprecated
             # Now pOmega is the power-law index for differential rotation: Ω(r) ∝ r^pOmega
@@ -164,21 +301,6 @@ class readParamsTomog:
                 self.fEntropyBright))
             import sys
             sys.exit()
-
-
-def getWavelengthGrid(velRs, obsSet, lineData, verbose=1):
-    # Generate wavelength grid for synthesis, using observed velocity grid (LSD)
-    # in stellar rest frame
-    wlSynSet = []
-    nObs = 0
-    nDataTot = 0
-    for obs in obsSet:
-        tmpWlSyn = (obs.wl - velRs[nObs]) / c * lineData.wl0 + lineData.wl0
-        wlSynSet += [tmpWlSyn]
-        nObs += 1
-        nDataTot += obs.wl.shape[0]
-
-    return wlSynSet, nDataTot
 
 
 def mainFittingLoop(par,
@@ -328,128 +450,6 @@ def mainFittingLoop(par,
     fOutFitSummary.close()
 
     return iIter, entropy, chi2nu, test, meanBright, meanBrightDiff, meanMag
-
-
-def saveModelProfs(par, setSynSpec, lineData, saveName):
-    #save final model spectra
-    fOutputSpec = open(saveName, 'w')
-    nPhase = 0
-    for spec in setSynSpec:
-        wl = (spec.wl - lineData.wl0) / lineData.wl0 * c + par.velRs[
-            nPhase]  #velocity in observer rest frame
-        fOutputSpec.write('#cycle %f\n' % (par.cycleList[nPhase]))
-        for i in range(spec.wl.shape[0]):
-            fOutputSpec.write('%e %e %e\n' % (wl[i], spec.IIc[i], spec.VIc[i]))
-        fOutputSpec.write('\n')
-
-        #And save in individual files as ZDI input ready, LSD profile format
-        sigmaOut = 1e-8
-        fOutLDS = open(par.fnames[nPhase].strip() + '.model', 'w')
-        fOutLDS.write('#synthetic prof cycle %f\n' % (par.cycleList[nPhase]))
-        fOutLDS.write('%i %i \n' % (spec.wl.shape[0], 6))
-        for i in range(spec.wl.shape[0]):
-            fOutLDS.write('%f %e %e %e %e %e %e\n' %
-                          (wl[i], spec.IIc[i], sigmaOut, spec.VIc[i], sigmaOut,
-                           0., sigmaOut))
-        fOutLDS.close()
-        #########################################################################
-        ##And save as ZDI input ready, LSD profile format with Gaussian noise.
-        #sigmaIOut = 1e-4
-        #sigmaVOut = 1e-5
-        #fOutLDS = open(par.fnames[nPhase].strip()+'.modelN', 'w')
-        #fOutLDS.write('#synthetic prof cycle %f\n' % (par.cycleList[nPhase]))
-        #fOutLDS.write('%i %i \n' % (spec.wl.shape[0], 6))
-        #for i in range(spec.wl.shape[0]):
-        #    #fOutLDS.write('%f %e %e %e %e %e %e\n' % (wl[i],  spec.IIc[i]+noiseI[i], sigmaIOut, spec.VIc[i]+noiseV[i], sigmaVOut, 0.+noiseN[i], sigmaVOut) )
-        #    noiseI = np.random.normal(spec.IIc[i], sigmaIOut)
-        #    noiseV = np.random.normal(spec.VIc[i], sigmaVOut)
-        #    noiseN = np.random.normal(0.0, sigmaVOut)
-        #    fOutLDS.write('%f %e %e %e %e %e %e\n' % (wl[i],  noiseI, sigmaIOut, noiseV, sigmaVOut, noiseN, sigmaVOut) )
-        #fOutLDS.close()
-        ##########################################################################
-
-        nPhase += 1
-    fOutputSpec.close()
-
-
-def saveObsUsed(obsSet, fName):
-    outObserved = open(fName, 'w')
-    for tmpObs in obsSet:
-        for i in range(tmpObs.wl.shape[0]):
-            outObserved.write(
-                '%e %e %e %e %e\n' %
-                (tmpObs.wl[i], tmpObs.specI[i], tmpObs.specIsig[i],
-                 tmpObs.specV[i], tmpObs.specVsig[i]))
-        outObserved.write('\n')
-    outObserved.close()
-
-
-###############################
-def equivWidComp2(lineStr, meanEquivWidObs, setSynSpec, lineData):
-    #Calculate the difference between a scaled synthetic profile
-    #equivalent width and an input observed equivalent width.
-    #Mostly for use when fitting line strength by equivalent width.
-    lineStr0 = lineData.str[0]
-    nObs = 0
-    meanEW = 0.
-    for spec in setSynSpec:
-
-        scaleI = 1. - (1. - spec.IIc) * (lineStr / lineStr0)
-        equivWidApprox = 0.
-        for i in range(spec.wl.shape[0] - 1):
-            equivWidApprox += (1. - scaleI[i]) * (spec.wl[i + 1] - spec.wl[i])
-        equivWidApprox += (1. - scaleI[-1]) * (spec.wl[-1] - spec.wl[-2])
-        meanEW += equivWidApprox
-
-        nObs += 1
-    meanEW /= float(nObs)
-    diffEW = np.abs(meanEquivWidObs - meanEW)
-    return diffEW
-
-
-def fitLineStrength(meanEquivWidObs,
-                    par,
-                    listGridView,
-                    vecMagCart,
-                    dMagCart0,
-                    briMap,
-                    lineData,
-                    wlSynSet,
-                    verbose=1):
-    # Try fitting the model line strength
-    # Match the model equivalent width to the mean observed equivalent width.
-    # Since the simple brightness model used in this code cannot change
-    # the equivalent width of a line, these quantities should generally match.
-    from scipy.optimize import minimize_scalar
-    import core.lineprofileVoigt as lineprofile
-
-    if (verbose == 1):
-        print('fitting line strength (by equivalent width)')
-    #Generate a set of spectra, then re-scale them (saves recalculating full spectra).
-    #Valid for Gaussian or Voigt local profiles, but not radiative transfer solutions
-    nObs = 0
-    setSynSpec = []
-    for phase in par.cycleList:
-        spec = lineprofile.diskIntProfAndDeriv(listGridView[nObs], vecMagCart,
-                                               dMagCart0, briMap, lineData,
-                                               par.velEq, wlSynSet[nObs], 0, 0)
-        spec.convolveIGnumpy(par.instrumentRes)
-        setSynSpec += [spec]
-        nObs += 1
-
-    fitLineStr = minimize_scalar(equivWidComp2,
-                                 bracket=(lineData.str[0] * 0.01,
-                                          lineData.str[0],
-                                          lineData.str[0] * 100.0),
-                                 method='brent',
-                                 tol=1e-5,
-                                 args=(meanEquivWidObs, setSynSpec, lineData))
-
-    if (verbose == 1):
-        ewidth = equivWidComp2(fitLineStr.x, 0, setSynSpec, lineData)
-        print('best match line strength is {:f} (ew {:f} )'.format(
-            fitLineStr.x, ewidth))
-    lineData.str[0] = fitLineStr.x
 
 
 #############################################

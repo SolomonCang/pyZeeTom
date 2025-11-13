@@ -4,10 +4,11 @@ import numpy as np
 
 class LineData:
     """
-    读取单行谱线参数文件（不需要 strength）:
-    常见行格式: wl0  [strength]  sigWl  g  [limbDark]
-    仅使用 wl0, sigWl, g；其余（strength/limbDark）若存在，仅为兼容而忽略。
+    读取单行谱线参数文件:
+    常见行格式: wl0  sigWl  g
+    仅使用 wl0, sigWl, g。
     """
+
     def __init__(self, filename):
         self.wl0 = None
         self.sigWl = None
@@ -28,13 +29,10 @@ class LineData:
                         pass
                 if len(vals) < 3:
                     continue
-                # 若 >=4 列，常见为 [wl0, strength, sigWl, g, ...]
-                if len(vals) >= 4:
-                    continue
-                else:  # len == 3 → [wl0, sigWl, g]
-                    self.wl0 = vals[0]
-                    self.sigWl = vals[1]
-                    self.g = vals[2]
+                # 取前三列: [wl0, sigWl, g]
+                self.wl0 = vals[0]
+                self.sigWl = vals[1]
+                self.g = vals[2]
                 self.numLines += 1
                 break
         if self.numLines == 0:
@@ -58,6 +56,7 @@ class BaseLineModel:
       - Ic_weight（可选）：若提供，作为像素加权系数在结果中相乘（例如用于盘面积分）。
         若不提供，则默认全 1。谱线连续谱基线恒为 1。
     """
+
     def compute_local_profile(self, wl_grid, amp, Blos=None, **kwargs):
         raise NotImplementedError
 
@@ -78,6 +77,7 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
       - amp 可为标量或每像素值；若传 (Npix,) 将广播到 (1,Npix) 并与 (Nλ,Npix) 的 wl_grid 对齐。
       - 返回结果若提供 Ic_weight，将在最后整体相乘（权重作用），不改变连续谱基线=1 的定义。
     """
+
     def __init__(self,
                  line_data: LineData,
                  k_QU: float = 1.0,

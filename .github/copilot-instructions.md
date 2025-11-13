@@ -32,7 +32,7 @@
   - 前14行为主控参数（部分磁场/亮度参数暂未用），第5行定义谱线模型参数（如`lineAmpConst k_QU enableV enableQU`）。
   - 第11行可指定谱线参数文件（如`lines.txt`），第12行可指定观测格式（如`lsd_i`/`spec_i`/`auto`）。
   - 14行后为观测文件名、JD、velR等。
-- **谱线参数文件**（如`lines.txt`）：每行`wl0 [strength] sigWl g [limbDark]`，最少需`wl0, sigWl, g`。
+- **谱线参数文件**（如`lines.txt`）：每行`wl0 sigWl g`
 - **观测数据**：支持多格式，自动识别，需包含`wl, specI, specV, specQ, specU, sigma`等。
 - **输出文件**：每相位生成`.model`文件（LSD格式），汇总信息写入`outFitSummary.txt`。
 

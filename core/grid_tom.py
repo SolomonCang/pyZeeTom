@@ -109,6 +109,146 @@ class diskGrid:
         phi_out = phi_c + 0.5 * dphi
         return r_in, r_out, phi_in, phi_out
 
+    def rotate_to_phase(self, phase, pOmega=0.0, r0=1.0, period=1.0):
+        """根据相位和差速转动参数，更新像素的方位角
+        
+        适用于时间演化场景：每个观测时刻，盘面结构随差速转动而变化。
+        
+        Parameters
+        ----------
+        phase : float
+            观测相位，phase = (JD - JD0) / period，表示从参考时刻经过的转动周期数
+        pOmega : float, optional
+            差速转动幂律指数，Ω(r) = Ω_ref × (r/r0)^pOmega
+            - pOmega = 0.0  : 刚体转动（默认）
+            - pOmega = -0.5 : 开普勒型（类太阳盘）
+            - pOmega = -1.0 : 恒定角动量
+        r0 : float, optional
+            参考半径，默认 1.0（通常取星球半径）
+        period : float, optional
+            参考半径处的转动周期（天），默认 1.0
+            
+        Returns
+        -------
+        phi_new : ndarray
+            更新后的方位角（弧度），shape = (numPoints,)
+            
+        Notes
+        -----
+        - 刚体转动（pOmega=0）：所有环以相同角速度 Ω_ref 转动，
+          Δφ = 2π × phase（与半径无关）
+        - 差速转动（pOmega≠0）：每环角速度 Ω(r) = Ω_ref × (r/r0)^pOmega，
+          Δφ(r) = 2π × phase × (r/r0)^pOmega
+        - 本方法不修改 self.phi，而是返回新的方位角数组，便于每个观测独立计算
+        """
+        phase = float(phase)
+        pOmega = float(pOmega)
+        r0 = float(max(r0, 1e-30))
+        period = float(period)
+
+        # 计算每个像素的角位移
+        if abs(pOmega) < 1e-12:
+            # 刚体转动：所有环转动相同角度
+            delta_phi = 2.0 * np.pi * phase
+        else:
+            # 差速转动：每环转动角度与半径相关
+            # Ω(r) = Ω_ref × (r/r0)^pOmega
+            # Δφ(r) = Ω(r) × Δt = Ω_ref × (r/r0)^pOmega × (phase × period)
+            # 而 Ω_ref × period = 2π（参考半径处一个周期转动 2π）
+            # 因此 Δφ(r) = 2π × phase × (r/r0)^pOmega
+            r_ratio = self.r / r0
+            delta_phi = 2.0 * np.pi * phase * np.power(r_ratio, pOmega)
+
+        # 更新方位角（周期性边界条件）
+        phi_new = (self.phi + delta_phi) % (2.0 * np.pi)
+        return phi_new
+
+    def compute_stellar_occultation_mask(self,
+                                         phi_obs,
+                                         inclination_deg,
+                                         stellar_radius=1.0,
+                                         verbose=0):
+        """计算恒星遮挡mask（无限薄赤道盘，光学薄）
+        
+        Parameters
+        ----------
+        phi_obs : float
+            观察者方向（弧度），观察者从这个方位角看向恒星中心
+            phi_obs=0 表示从"上方"（+x方向）观测
+        inclination_deg : float
+            倾角（度），i=0为face-on（从极点看），i=90为edge-on（从赤道面看）
+        stellar_radius : float, optional
+            恒星半径（与盘面半径相同单位），默认1.0
+        verbose : int, optional
+            是否输出调试信息
+            
+        Returns
+        -------
+        mask : ndarray (bool)
+            遮挡mask，shape = (numPoints,)
+            True = 被恒星遮挡，False = 可见
+            
+        Notes
+        -----
+        物理模型：
+        - 盘为无限薄，位于赤道面（z=0）
+        - 恒星为半径 R* 的球体，中心在原点
+        - 观测者方向固定，从 phi_obs 方向看过来
+        - 遮挡mask只依赖于几何参数（phi_obs, inclination, R*），不随时间变化
+        
+        坐标系约定：
+        - 盘面坐标系：(r, φ) 柱坐标，z=0 平面
+        - 观察者视线：从 (x, y) = (cos(phi_obs), sin(phi_obs)) 方向看向原点
+        - 倾角：视线与z轴的夹角
+        
+        遮挡判据：
+        - 将像素位置投影到垂直于视线的平面上
+        - 若投影距离 < R*，且像素在恒星后方（沿视线方向），则被遮挡
+        """
+        if self.numPoints == 0:
+            return np.array([], dtype=bool)
+
+        inclination_rad = np.deg2rad(float(inclination_deg))
+        phi_obs = float(phi_obs)
+        R_star = float(stellar_radius)
+
+        # 像素笛卡尔坐标（盘面坐标系，z=0）
+        x_disk = self.r * np.cos(self.phi)
+        y_disk = self.r * np.sin(self.phi)
+        z_disk = np.zeros_like(self.r)  # 无限薄盘
+
+        # 观察者视线方向单位矢量（从远处指向恒星中心）
+        # 视线在 x-y 平面的投影沿 phi_obs 方向，与 z 轴夹角为 inclination
+        sin_i = np.sin(inclination_rad)
+        cos_i = np.cos(inclination_rad)
+
+        # 视线方向: n_obs = (sin_i * cos(phi_obs), sin_i * sin(phi_obs), cos_i)
+        # 观察者坐标系：视线沿 -z' 轴，需要坐标变换
+
+        # 方法：计算像素沿视线方向的距离（正=远离观察者，负=靠近观察者）
+        # 距离 = r_pixel · n_obs
+        dist_along_view = (x_disk * sin_i * np.cos(phi_obs) +
+                           y_disk * sin_i * np.sin(phi_obs) + z_disk * cos_i)
+
+        # 像素到视线的垂直距离（投影距离）
+        # r_perp^2 = |r_pixel|^2 - (r_pixel · n_obs)^2
+        r_pixel_sq = x_disk**2 + y_disk**2 + z_disk**2
+        r_perp = np.sqrt(np.maximum(0.0, r_pixel_sq - dist_along_view**2))
+
+        # 遮挡判据：
+        # 1. 垂直距离 < R*（在恒星投影圆盘内）
+        # 2. dist_along_view < 0（在恒星后方，相对观察者）
+        mask = (r_perp < R_star) & (dist_along_view < 0)
+
+        if verbose:
+            n_occult = np.sum(mask)
+            print(
+                f"[Occultation] phi_obs={np.degrees(phi_obs):.1f}°, i={inclination_deg:.1f}°, "
+                f"{n_occult}/{self.numPoints} pixels occulted ({100.0*n_occult/max(self.numPoints,1):.1f}%)"
+            )
+
+        return mask
+
 
 def sector_polygon(r_in, r_out, phi_in, phi_out, samples_per_edge=12):
     n = max(2, int(samples_per_edge))

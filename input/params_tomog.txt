@@ -1,43 +1,66 @@
 # Example tomography parameter file (params_example.tomog)
 # Lines are positional. Blank lines and lines starting with # are ignored.
-# New fields: instrumentRes lineParamFile ; velStart velEnd obsFileType
-# After line 13: each line => obs_filename  JD  velR
-# Units: angles in degrees, velocities km/s, dates JD.
+# Units: angles in degrees, velocities km/s, dates in HJD (Heliocentric Julian Date).
 
 #0 inclination  vsini  period  pOmega
+# period: rotation period at reference radius r0 (in days)
 # pOmega: power-law index for differential rotation, Ω(r) = Ω_ref × (r/r0)^pOmega
 #   pOmega = 0.0  : rigid rotation
 #   pOmega = -0.5 : Keplerian (solar-type for disk)
 #   pOmega = -1.0 : constant angular momentum
-# Note: period refers to reference rotation period at r = r0 (typically set in integrator)
-60.0  25.0  1.2345  -1.5
-#1 mass  radius
-1.0  1.0
+60.0  25.0  1.0  -0.05
+
+#1 mass  radius  [Vmax]  [r_out]  [enable_occultation]
+# Two modes for grid construction:
+#   Mode 1: Set Vmax > 0 (e.g., 300 km/s) → grid uses Vmax directly, ignores radius/r_out
+#   Mode 2: Set Vmax = 0 and r_out > 0 → grid computed from radius, r_out, vsini, inclination
+# radius: stellar radius (R_sun), also used as reference radius r0 for differential rotation
+# r_out: outer disk radius (in units of stellar radius), used if Vmax=0
+# enable_occultation: 0=off, 1=on (compute stellar occultation mask for equatorial disk)
+1.0  1.0  0.0  2.0  0
+
 #2 nRingsStellarGrid
 60
+
 #3 targetForm  targetValue  numIterations   (C=chi^2 target, E=entropy target)
 C  1.0  0
+
 #4 test_aim (convergence threshold for Test statistic)
 1e-3
+
 #5 lineAmpConst  k_QU  enableV  enableQU
 -0.5  1.0  1  1
+
 #6 initMagFromFile  initMagGeomFile (legacy flag + filename)
 0  none
+
 #7 fitBri  chiScaleI  brightEntScale
 0  1.0  1.0
+
 #8 fEntropyBright  defaultBright  maximumBright
 1  1.0  2.0
+
 #9 initBrightFromFile  initBrightFile
 0  none
+
 #10 estimateStrenght (legacy line strength fitting flag)
 0
-#11 instrumentRes  lineParamFile
-5.0  lines.txt
+
+#11 spectralResolution  lineParamFile
+# spectralResolution: spectrograph resolution (e.g., 65000), will compute FWHM = c/R (km/s)
+# lineParamFile: path to line parameters file (format: wl0 sigWl g)
+65000  lines.txt
+
 #12 velStart  velEnd  obsFileType
 -300.0  300.0  lsd_i
-#13 jDateRef
-2450000.0
+
+#13 jDateRef  (HJD0, reference epoch for phase calculation: phase = (HJD - HJD0) / period)
+0.5
 
 #14+ observation entries: filename  JD  velR
-obs/phase001.lsd  2450000.10  10.0
-obs/phase002.lsd  2450000.20  -5.0
+# Example for 5 phases over 1 rotation period (0-1 day):
+obs/obs_phase_00.lsd  0.20  0.0
+obs/obs_phase_01.lsd  0.40  0.0
+obs/obs_phase_02.lsd  0.60  0.0
+obs/obs_phase_03.lsd  0.80  0.0
+obs/obs_phase_04.lsd  1.00  0.0

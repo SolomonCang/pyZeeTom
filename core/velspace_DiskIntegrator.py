@@ -200,6 +200,20 @@ class VelspaceDiskIntegrator:
         # 存储相位信息（用于时间演化支持）
         self.time_phase = time_phase if time_phase is not None else obs_phase
 
+        # 计算时间演化后的方位角（用于响应函数和投影）
+        phi_evolved = self.grid.phi
+        if self.time_phase is not None and hasattr(self.grid,
+                                                   'rotate_to_phase'):
+            # 从几何对象获取差速转动参数
+            pOmega = getattr(geom, 'pOmega', disk_power_index)
+            r0_rot = getattr(geom, 'r0', disk_r0)
+            period = getattr(geom, 'period', 1.0)
+            # 计算演化后的方位角
+            phi_evolved = self.grid.rotate_to_phase(self.time_phase,
+                                                    pOmega=pOmega,
+                                                    r0=r0_rot,
+                                                    period=period)
+
         # 响应 A_i（>1 发射更强，<1 较弱），此处不将 A 转为"振幅"，直接乘到连续权重中
         # 支持时间相关的响应函数：若 response_func 可接受 phase 参数，则传入
         if response_func is not None:
@@ -207,13 +221,13 @@ class VelspaceDiskIntegrator:
             import inspect
             sig = inspect.signature(response_func)
             if 'phase' in sig.parameters and self.time_phase is not None:
-                # 时间相关响应函数：f(r, phi, phase)
+                # 时间相关响应函数：f(r, phi, phase)，使用演化后的 phi
                 A = response_func(self.grid.r,
-                                  self.grid.phi,
+                                  phi_evolved,
                                   phase=self.time_phase)
             else:
-                # 静态响应函数：f(r, phi)
-                A = response_func(self.grid.r, self.grid.phi)
+                # 静态响应函数：f(r, phi)，使用演化后的 phi
+                A = response_func(self.grid.r, phi_evolved)
         elif response_map is not None:
             A = np.asarray(response_map)
             assert A.shape[0] == self.grid.numPoints
@@ -233,6 +247,10 @@ class VelspaceDiskIntegrator:
             v0_r0 = float(disk_v0_kms)
             p = float(disk_power_index)
             r0 = float(disk_r0)
+            # 保存到对象以便导出
+            self._disk_v0_kms = v0_r0
+            self._disk_power_index = p
+            self._disk_r0 = r0
             mode = str(inner_slowdown_mode).lower()
             if mode == "adaptive":
                 v_phi = disk_velocity_adaptive_inner_omega_sequence(
@@ -256,21 +274,37 @@ class VelspaceDiskIntegrator:
                 raise ValueError(
                     "inner_slowdown_mode must be 'adaptive' or 'continuous'")
 
-            # 视向投影
+            # 视向投影（使用时间演化后的方位角 phi_evolved）
             if los_proj_func is not None:
-                proj = los_proj_func(self.grid.r, self.grid.phi, self.geom,
+                proj = los_proj_func(self.grid.r, phi_evolved, self.geom,
                                      obs_phase)
             elif hasattr(self.geom, "proj_factor"):
                 proj = np.asarray(self.geom.proj_factor)
             else:
                 inc = getattr(self.geom, "inclination_rad", np.deg2rad(90.0))
                 phi0 = getattr(self.geom, "phi0", 0.0)
-                proj = np.sin(inc) * np.sin(self.grid.phi - phi0)
+                proj = np.sin(inc) * np.sin(phi_evolved - phi0)
             proj = np.asarray(proj)
             if proj.shape == ():
                 proj = np.full(self.grid.numPoints, float(proj))
             assert proj.shape[0] == self.grid.numPoints
             v_los = v_phi * proj
+
+        # 检查是否需要计算恒星遮挡
+        occultation_mask = np.zeros(self.grid.numPoints, dtype=bool)
+        if hasattr(self.geom, 'enable_stellar_occultation'
+                   ) and self.geom.enable_stellar_occultation:
+            # 从几何对象获取必要参数
+            # 观察者方向固定（通常为phi_obs=0）
+            phi_obs = getattr(self.geom, "phi_obs", 0.0)
+            inclination_deg = np.rad2deg(
+                getattr(self.geom, "inclination_rad", np.deg2rad(60.0)))
+            stellar_radius = getattr(self.geom, "stellar_radius", 1.0)
+            occultation_mask = self.grid.compute_stellar_occultation_mask(
+                phi_obs=phi_obs,
+                inclination_deg=inclination_deg,
+                stellar_radius=stellar_radius,
+                verbose=1)
 
         # 映射观测速度网格 -> 每像素局部波长网格
         c = C_KMS
@@ -279,10 +313,14 @@ class VelspaceDiskIntegrator:
         wl_cells = (wl_obs[:, None] / denom[None, :])  # (Nv, Npix)
 
         # 连续谱权重 Ic_weight：几何权重（不包含响应）
-        Ic_weight = W  # (Npix,)
+        # 应用遮挡mask：被遮挡的像素权重设为0
+        Ic_weight = W.copy()  # (Npix,)
+        Ic_weight[occultation_mask] = 0.0
 
         # 振幅：响应权重 A 作为谱线振幅（可为发射/吸收）
-        amp = A  # (Npix,)
+        # 同样应用遮挡mask
+        amp = A.copy()  # (Npix,)
+        amp[occultation_mask] = 0.0
 
         # 视向磁场（可选）：若 geom 提供 Blos 则使用，否则为 0
         if hasattr(self.geom, "B_los"):
@@ -353,3 +391,284 @@ class VelspaceDiskIntegrator:
         c = C_KMS
         lam = self.wl0 * (1.0 + self.v / c)
         return lam, self.I
+
+    # ------------------------------
+    # 模型读/写：geomodel.tomog
+    # ------------------------------
+    def write_geomodel(self, filepath, meta=None):
+        """
+        将当前几何模型与节点物理量导出为文本文件 geomodel.tomog。
+
+        文件结构（纯文本，便于审阅与版本控制）：
+        - 以 '#' 开头的头部区，键值对形式，包含可重建模型所需的参数
+        - 一行列名（# COLUMNS: ...）
+        - 每个像素一行数据。
+
+        节点字段至少包含：
+        - idx, ring_id, phi_id, r, phi, area, Ic_weight, A(response), Blos
+        - 若可用：Bperp, chi
+        """
+        import datetime as _dt
+
+        g = self.grid
+        geom = self.geom
+
+        # 元信息汇总，尽量完整但不过度依赖外部对象
+        header = {
+            "format":
+            "TOMOG_MODEL",
+            "version":
+            1,
+            "created_utc":
+            _dt.datetime.utcnow().isoformat() + "Z",
+            "wl0_nm":
+            float(self.wl0),
+            "inst_fwhm_kms":
+            float(self.inst_fwhm),
+            "normalize_continuum":
+            bool(self.normalize_continuum),
+            # 速度场参数（用于可再现）
+            "disk_v0_kms":
+            getattr(self, "_disk_v0_kms", None),
+            "disk_power_index":
+            getattr(self, "_disk_power_index", None),
+            "disk_r0":
+            getattr(self, "_disk_r0", None),
+            # 差速与几何
+            "inclination_deg":
+            float(
+                np.rad2deg(getattr(geom, "inclination_rad",
+                                   np.deg2rad(90.0)))),
+            "phi0":
+            float(getattr(geom, "phi0", 0.0)),
+            "pOmega":
+            float(getattr(geom, "pOmega", 0.0)),
+            "r0_rot":
+            float(getattr(geom, "r0", getattr(self, "_disk_r0", 1.0))),
+            "period":
+            float(getattr(geom, "period", 1.0)),
+            # 网格定义（用于重建）
+            "nr":
+            int(getattr(g, "nr", len(getattr(g, "r_centers", []))))
+        }
+
+        # 可选：目标/观测信息由调用方通过 meta 传入
+        if isinstance(meta, dict):
+            for k, v in meta.items():
+                header[str(k)] = v
+
+        # 磁场分量
+        has_Blos = hasattr(geom, "B_los") and geom.B_los is not None
+        has_Bperp = hasattr(geom, "B_perp") and geom.B_perp is not None
+        has_chi = hasattr(geom, "chi") and geom.chi is not None
+
+        # 响应与几何权重
+        A = np.asarray(getattr(self, "response", np.ones(g.numPoints)))
+        Ic_weight = np.asarray(getattr(self, "W", np.ones(g.numPoints)))
+
+        # 列定义
+        columns = [
+            "idx", "ring_id", "phi_id", "r", "phi", "area", "Ic_weight", "A",
+            "Blos"
+        ]
+        if has_Bperp:
+            columns += ["Bperp"]
+        if has_chi:
+            columns += ["chi"]
+
+        # 写文件
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("# TOMOG Geometric Model File\n")
+            for k in sorted(header.keys()):
+                v = header[k]
+                # 处理数组型头字段（例如 r_edges）
+                if isinstance(v, (list, tuple, np.ndarray)):
+                    arr = np.asarray(v).ravel()
+                    vstr = ",".join(f"{x:.12g}" for x in arr)
+                    f.write(f"# {k}: [{vstr}]\n")
+                else:
+                    f.write(f"# {k}: {v}\n")
+
+            # 尝试补充网格边界（若可用）
+            if hasattr(g, "r_edges"):
+                vstr = ",".join(f"{x:.12g}"
+                                for x in np.asarray(g.r_edges).ravel())
+                f.write(f"# r_edges: [{vstr}]\n")
+
+            f.write("# COLUMNS: " + ", ".join(columns) + "\n")
+
+            N = g.numPoints
+            for i in range(N):
+                row = [
+                    i,
+                    int(g.ring_id[i]) if hasattr(g, "ring_id") else -1,
+                    int(getattr(g, "phi_id", np.zeros_like(g.r, int))[i]),
+                    float(g.r[i]),
+                    float(g.phi[i]),
+                    float(g.area[i]),
+                    float(Ic_weight[i]),
+                    float(A[i]),
+                    float(geom.B_los[i]) if has_Blos else 0.0,
+                ]
+                if has_Bperp:
+                    row.append(float(geom.B_perp[i]))
+                if has_chi:
+                    row.append(float(geom.chi[i]))
+                f.write(" ".join(str(x) for x in row) + "\n")
+
+    @staticmethod
+    def read_geomodel(filepath):
+        """
+        读取 geomodel.tomog，返回 (geom_like, meta, table)
+
+        - geom_like: 一个提供 integrator 所需属性的几何对象：
+          .grid（包含 r, phi, area, ring_id, phi_id, r_edges/centers/dr 若可用）
+          .area_proj, .inclination_rad, .phi0, .pOmega, .r0, .period
+          .B_los（可选）, .B_perp（可选）, .chi（可选）
+        - meta: 头部键值对（字典）
+        - table: 原始数据表（dict of np.ndarray）
+        """
+        import re as _re
+
+        meta = {}
+        rows = []
+        columns = None
+        r_edges = None
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            for ln in f:
+                if ln.startswith("#"):
+                    # 解析头部键值
+                    m = _re.match(r"^#\s*([^:]+):\s*(.*)$", ln.strip())
+                    if m:
+                        k = m.group(1).strip()
+                        v = m.group(2).strip()
+                        if k == "COLUMNS":
+                            columns = [s.strip() for s in v.split(",")]
+                        elif k == "r_edges":
+                            # 解析数组
+                            vs = v.strip()
+                            vs = vs.strip("[]")
+                            if vs:
+                                r_edges = np.array(
+                                    [float(x) for x in vs.split(",")])
+                        else:
+                            # 尝试将数字转为 float/int
+                            vv = v
+                            if vv.startswith("[") and vv.endswith("]"):
+                                try:
+                                    arr = [
+                                        float(x)
+                                        for x in vv.strip("[]").split(",")
+                                        if x.strip()
+                                    ]
+                                    meta[k] = np.array(arr)
+                                except Exception:
+                                    meta[k] = vv
+                            else:
+                                try:
+                                    if _re.match(r"^-?\d+$", vv):
+                                        meta[k] = int(vv)
+                                    else:
+                                        meta[k] = float(vv)
+                                except Exception:
+                                    meta[k] = vv
+                    continue
+                ln = ln.strip()
+                if not ln:
+                    continue
+                parts = ln.split()
+                rows.append(parts)
+
+        if columns is None:
+            # 使用默认列顺序回退
+            columns = [
+                "idx", "ring_id", "phi_id", "r", "phi", "area", "Ic_weight",
+                "A", "Blos", "Bperp", "chi"
+            ]
+
+        # 整理为数组表
+        data = list(zip(*rows)) if rows else []
+        table = {}
+        for i, name in enumerate(columns):
+            if i < len(data):
+                try:
+                    arr = np.array([float(x) for x in data[i]], dtype=float)
+                except Exception:
+                    # 混合类型，保持字符串
+                    arr = np.array(data[i])
+                table[name] = arr
+
+        # 构造 grid-like 对象
+        from types import SimpleNamespace as _NS
+
+        grid = _NS()
+        grid.r = table.get("r", np.array([]))
+        grid.phi = table.get("phi", np.array([]))
+        grid.area = table.get("area", np.array([]))
+        base_r = grid.r if isinstance(grid.r, np.ndarray) else np.array([])
+        grid.ring_id = table.get("ring_id", np.zeros_like(base_r,
+                                                          int)).astype(int)
+        grid.phi_id = table.get("phi_id", np.zeros_like(base_r,
+                                                        int)).astype(int)
+        grid.numPoints = base_r.shape[0]
+
+        # 尝试恢复 r_edges / r_centers / dr
+        if r_edges is None and "nr" in meta and grid.numPoints > 0:
+            # 简单回退：用每 ring_id 的 r 中值 + 边界补点
+            nr = int(meta["nr"]) if isinstance(meta["nr"],
+                                               (int, float)) else int(
+                                                   meta["nr"])  # type: ignore
+            r_med = []
+            for rid in range(nr):
+                mask = (grid.ring_id == rid)
+                if np.any(mask):
+                    r_med.append(np.median(grid.r[mask]))
+            if r_med:
+                r_med = np.array(r_med)
+                dr = np.diff(r_med)
+                dr0 = dr[0] if dr.size > 0 else (
+                    r_med[0] if r_med.size > 0 else 1.0)
+                r_edges = np.concatenate(
+                    [[r_med[0] - 0.5 * dr0], 0.5 * (r_med[:-1] + r_med[1:]),
+                     [r_med[-1] + 0.5 * (dr[-1] if dr.size > 0 else dr0)]])
+
+        if r_edges is None:
+            # 最后回退：用唯一半径排序构造
+            unique_r = np.unique(grid.r)
+            if unique_r.size >= 2:
+                mid = 0.5 * (unique_r[:-1] + unique_r[1:])
+                dr0 = unique_r[1] - unique_r[0]
+                r_edges = np.concatenate(
+                    [[unique_r[0] - 0.5 * dr0], mid,
+                     [unique_r[-1] + 0.5 * (unique_r[-1] - unique_r[-2])]])
+            else:
+                r_edges = np.array(
+                    [0.0, unique_r[0] if unique_r.size else 1.0])
+
+        grid.r_edges = r_edges
+        grid.r_centers = 0.5 * (
+            r_edges[:-1] + r_edges[1:]) if r_edges.size >= 2 else np.array([])
+        grid.dr = (r_edges[1:] -
+                   r_edges[:-1]) if r_edges.size >= 2 else np.array([])
+
+        # 构造 geom-like 对象
+        geom = _NS()
+        geom.grid = grid
+        geom.area_proj = grid.area
+        geom.inclination_rad = np.deg2rad(
+            float(meta.get("inclination_deg", 90.0)))
+        geom.phi0 = float(meta.get("phi0", 0.0))
+        geom.pOmega = float(meta.get("pOmega", 0.0))
+        geom.r0 = float(meta.get("r0_rot", meta.get("disk_r0", 1.0)))
+        geom.period = float(meta.get("period", 1.0))
+
+        # 磁场
+        if "Blos" in table:
+            geom.B_los = table["Blos"].astype(float)
+        if "Bperp" in table:
+            geom.B_perp = table["Bperp"].astype(float)
+        if "chi" in table:
+            geom.chi = table["chi"].astype(float)
+
+        return geom, meta, table
