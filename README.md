@@ -48,13 +48,11 @@ tomography.run_tomography('input/params_tomog.txt')
 
 ## 核心结构
 
-- `core/grid_tom.py`：环状/盘面网格生成
-- `core/local_linemodel_basic.py` / `local_linemodel_ME.py`：局部谱线模型
-- `core/velspace_DiskIntegrator.py`：速度空间积分
-- `core/readObs.py`：观测数据读取与标准化
-- `core/spot_geometry.py`：团块定义与差速转动演化
-- `core/mainFuncs.py`：参数解析与相位计算
-- `pyzeetom/tomography.py`：主流程入口
+
+### 模型构筑基本逻辑
+- **观察者与网格结构不动**：观测者与中心天体处于同一惯性系，盘面网格（r, φ）结构在所有相位保持不变。
+- **物质结构随自转/差速转动演化**：盘面上的物质（如团块、亮度/磁场分布）会因恒星自转或差速转动而在 φ 方向发生平移或剪切，具体由 $\phi(t) = \phi_0 + \Omega(r) t$ 控制。
+- **每一观测相位**：重新计算物质分布（如团块位置），但网格本身和投影几何不变，仅物质属性（如亮度、磁场）随时间演化。
 
 > 详细结构与开发约定见 [copilot-instructions.md](.github/copilot-instructions.md)
 
