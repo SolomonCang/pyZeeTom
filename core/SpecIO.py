@@ -1,15 +1,67 @@
+from __future__ import annotations
+# -----------------------------------------------------------------------------
+# Grid (diskGrid) structure IO for tomography
+# -----------------------------------------------------------------------------
+import json
+import numpy as np
+
+
+def write_model_grid(filename: str, grid, meta: dict = None):
+    """
+    保存 diskGrid 结构到文件，支持所有像素属性（r, phi, area, ring_id, phi_id, ...）。
+    meta 可选，写入文件头部（json）。
+    """
+    meta = meta or {}
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write('# TOMOGRID 1.0\n')
+        f.write('#META ' + json.dumps(meta, ensure_ascii=False) + '\n')
+        cols = ["r", "phi", "area", "ring_id", "phi_id"]
+        for attr in ["dr_cell", "dphi_cell"]:
+            if hasattr(grid, attr):
+                cols.append(attr)
+        f.write('# ' + ' '.join(cols) + '\n')
+        for i in range(grid.numPoints):
+            vals = [getattr(grid, k)[i] for k in cols]
+            f.write(' '.join(f'{v:.8g}' if isinstance(v, float) else str(v)
+                             for v in vals) + '\n')
+
+
+def load_model_grid(filename: str):
+    """
+    读取 diskGrid 结构文件，返回 grid-like 对象和meta。
+    """
+    from types import SimpleNamespace as _NS
+    with open(filename, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    meta = {}
+    cols = []
+    data = []
+    for ln in lines:
+        if ln.startswith('#META'):
+            meta = json.loads(ln[5:].strip())
+        elif ln.startswith('#') and 'TOMOGRID' in ln:
+            continue
+        elif ln.startswith('#'):
+            cols = ln[1:].strip().split()
+        elif ln.strip():
+            data.append([float(x) for x in ln.strip().split()])
+    arr = np.array(data)
+    grid = _NS()
+    for i, k in enumerate(cols):
+        grid.__setattr__(k, arr[:, i])
+    grid.numPoints = arr.shape[0]
+    return grid, meta
+
+
 """SpecIO.py — Spectral IO utilities
 
 - 读入：支持 LSD/spec (I/pol/simple) 光谱数据为 ObservationProfile
-- 写出：支持根据模型积分结果写出模型光谱（速度或波长域）
+- 写出：支持根据模型积分结果写出模型光谱（速度或波长域)
 
 兼容老接口（loadObsProfile/obsProfSetInRange/getObservedEW）。
 """
 
-from __future__ import annotations
-
 import io
-import numpy as np
 import pandas as pd
 from typing import Optional, Tuple, List, Dict
 
@@ -125,6 +177,7 @@ def _heuristic_guess(df: pd.DataFrame):
         return None, None
 
     if ncol == 6:
+        # 统一约定：6 列仅可能为波长域 spec_pol（Wav Int Pol Null1 Null2 sigma_int）
         return "spec_pol", _assign_columns_by_type(df, "spec_pol")[0]
     if ncol == 7:
         return "lsd_pol", _assign_columns_by_type(df, "lsd_pol")[0]
@@ -195,7 +248,8 @@ class ObservationProfile:
                  specQ: Optional[np.ndarray] = None,
                  specU: Optional[np.ndarray] = None,
                  null: Optional[np.ndarray] = None,
-                 profile_type: str = "unknown"):
+                 profile_type: str = "unknown",
+                 pol_channel: str = "V"):
         self.wl = np.asarray(wl, dtype=float)
         self.specI = np.asarray(specI, dtype=float)
         self.specIsig = np.asarray(
@@ -213,6 +267,20 @@ class ObservationProfile:
         self.null = np.asarray(
             null, dtype=float) if null is not None else np.zeros_like(specI)
         self.profile_type = profile_type
+        # 新增：记录偏振通道（I/V/Q/U）
+        self.pol_channel = pol_channel.upper() if pol_channel else "V"
+        # 标记可用的偏振分量
+        comps = {'I'}
+        if self.specV is not None and np.any(self.specV != 0.0):
+            comps.add('V')
+        if self.specQ is not None and np.any(self.specQ != 0.0):
+            comps.add('Q')
+        if self.specU is not None and np.any(self.specU != 0.0):
+            comps.add('U')
+        self.components_present = comps
+        self.hasV = 'V' in comps
+        self.hasQ = 'Q' in comps
+        self.hasU = 'U' in comps
 
     def scaleIsig(self, scale_factor: float):
         self.specIsig *= scale_factor
@@ -222,7 +290,8 @@ def loadObsProfile(filename: str,
                    file_type: str = "auto",
                    vel_start: Optional[float] = None,
                    vel_end: Optional[float] = None,
-                   vel_shift: float = 0.0) -> Optional[ObservationProfile]:
+                   vel_shift: float = 0.0,
+                   pol_channel: str = "V") -> Optional[ObservationProfile]:
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             text = f.read()
@@ -268,21 +337,28 @@ def loadObsProfile(filename: str,
                               specV=specV,
                               specVsig=specVsig,
                               null=null,
-                              profile_type=resolved_type)
+                              profile_type=resolved_type,
+                              pol_channel=pol_channel)
 
 
-def obsProfSetInRange(fnames: List[str],
-                      vel_start: float,
-                      vel_end: float,
-                      vel_shifts: Optional[np.ndarray] = None,
-                      file_type: str = "auto") -> List[ObservationProfile]:
+def obsProfSetInRange(
+        fnames: List[str],
+        vel_start: float,
+        vel_end: float,
+        vel_shifts: Optional[np.ndarray] = None,
+        file_type: str = "auto",
+        pol_channels: Optional[List[str]] = None) -> List[ObservationProfile]:
     if vel_shifts is None:
         vel_shifts = np.zeros(len(fnames))
+    if pol_channels is None:
+        pol_channels = ["V"] * len(fnames)
 
     obsSet = []
     for i, fname in enumerate(fnames):
+        pol_chan = pol_channels[i] if i < len(pol_channels) else "V"
         obs = loadObsProfile(fname,
                              file_type=file_type,
+                             pol_channel=pol_chan,
                              vel_start=vel_start,
                              vel_end=vel_end,
                              vel_shift=vel_shifts[i])
@@ -324,11 +400,17 @@ def write_model_spectrum(filename: str,
                          U: Optional[np.ndarray] = None,
                          sigmaI: Optional[np.ndarray] = None,
                          fmt: str = "lsd",
-                         header: Optional[Dict[str, str]] = None) -> None:
-    """
-    将模型光谱写入文件。
-    - fmt="lsd": 速度域 (km/s) 列：RV Int [sigma_int] [V] [Q] [U]
-    - fmt="spec": 波长域 (nm) 列：Wav Int [sigma_int] [V] [Q] [U]
+                         header: Optional[Dict[str, str]] = None,
+                         pol_channel: str = 'V',
+                         include_null: bool = False,
+                         file_type_hint: Optional[str] = None) -> None:
+    """将模型光谱写入文件。
+
+    默认输出：
+      - fmt="lsd": 速度域 (km/s) 列：RV Int sigma_int V Q U 或扩展 7 列 LSD(pol) 格式
+      - fmt="spec": 波长域 (nm) 列：Wav Int sigma_int V Q U
+
+        为保证与解析类型一致，建议在需要特定结构时显式传入 file_type_hint（如 'spec_pol'）。
     """
     x = np.asarray(x, dtype=float)
     Iprof = np.asarray(Iprof, dtype=float)
@@ -339,17 +421,165 @@ def write_model_spectrum(filename: str,
         sigmaI, dtype=float)
 
     name_x = "RV" if fmt == "lsd" else "Wav"
-    cols = [name_x, "Int", "sigma_int", "V", "Q", "U"]
+    pol_channel = (pol_channel or 'V').upper()
 
-    with open(filename, "w", encoding="utf-8") as f:
-        if header:
-            for k, v in header.items():
-                f.write(f"# {k}: {v}\n")
-        f.write("# " + " ".join(cols) + "\n")
-        for i in range(x.size):
-            f.write(
-                f"{x[i]:.6f} {Iprof[i]:.8e} {sigmaI[i]:.3e} {V[i]:.8e} {Q[i]:.8e} {U[i]:.8e}\n"
-            )
+    # ------------------------------------------------------------------
+    # 自动推断输出格式（若未显式指定 file_type_hint）
+    # ------------------------------------------------------------------
+    if file_type_hint is None:
+        # 根据 pol_channel 和 fmt 自动选择合适的输出格式
+        if pol_channel == 'I':
+            # I 通道：输出 spec_i 或 lsd_i 格式（3列）
+            file_type_hint = 'lsd_i' if fmt == 'lsd' else 'spec_i'
+        else:
+            # V/Q/U 通道：输出 spec_pol 或 lsd_pol 格式
+            file_type_hint = 'lsd_pol' if fmt == 'lsd' else 'spec_pol'
+
+    # ------------------------------------------------------------------
+    # 显式文件类型输出（优先级高于 fmt/force_input_structure）
+    # 支持：spec_pol, spec_i, spec_i_simple, lsd_pol, lsd_i, lsd_i_simple
+    # ------------------------------------------------------------------
+    if file_type_hint is not None:
+        fth = file_type_hint.lower()
+        if fth == 'spec_pol':
+            # Wav(nm) Int Pol Null1 Null2 sigma_int
+            if pol_channel == 'V':
+                pol = V
+            elif pol_channel == 'Q':
+                pol = Q
+            else:
+                pol = U
+            pol = np.zeros_like(Iprof) if pol is None else np.asarray(
+                pol, dtype=float)
+            sigma_int = np.zeros_like(Iprof) if sigmaI is None else sigmaI
+            null1 = np.zeros_like(Iprof)
+            null2 = np.zeros_like(Iprof)
+            cols = ["Wav(nm)", "Int", "Pol", "Null1", "Null2", "sigma_int"]
+            with open(filename, 'w', encoding='utf-8') as f:
+                if header:
+                    for k, v in header.items():
+                        f.write(f"# {k}: {v}\n")
+                f.write('# ' + ' '.join(cols) + '\n')
+                for i in range(x.size):
+                    f.write(
+                        f"{x[i]:.6f} {Iprof[i]:.8e} {pol[i]:.8e} {null1[i]:.1f} {null2[i]:.1f} {sigma_int[i]:.3e}\n"
+                    )
+            return
+        elif fth == 'spec_i':
+            # Wav Int sigma_int
+            sigma_int = np.zeros_like(Iprof) if sigmaI is None else sigmaI
+            cols = ["Wav", "Int", "sigma_int"]
+            with open(filename, 'w', encoding='utf-8') as f:
+                if header:
+                    for k, v in header.items():
+                        f.write(f"# {k}: {v}\n")
+                f.write('# ' + ' '.join(cols) + '\n')
+                for i in range(x.size):
+                    f.write(f"{x[i]:.6f} {Iprof[i]:.8e} {sigma_int[i]:.3e}\n")
+            return
+        elif fth == 'spec_i_simple':
+            # Wav Int
+            cols = ["Wav", "Int"]
+            with open(filename, 'w', encoding='utf-8') as f:
+                if header:
+                    for k, v in header.items():
+                        f.write(f"# {k}: {v}\n")
+                f.write('# ' + ' '.join(cols) + '\n')
+                for i in range(x.size):
+                    f.write(f"{x[i]:.6f} {Iprof[i]:.8e}\n")
+            return
+        elif fth == 'lsd_pol':
+            # RV Int sigma_int Pol sigma_pol Null1 sigma_null1
+            if pol_channel == 'V':
+                pol = V
+            elif pol_channel == 'Q':
+                pol = Q
+            else:
+                pol = U
+            pol = np.zeros_like(Iprof) if pol is None else np.asarray(
+                pol, dtype=float)
+            sigma_pol = np.zeros_like(Iprof) if sigmaI is None else sigmaI
+            null1 = np.zeros_like(Iprof)
+            sigma_null1 = sigma_pol
+            cols = [
+                "RV", "Int", "sigma_int", "Pol", "sigma_pol", "Null1",
+                "sigma_null1"
+            ]
+            with open(filename, 'w', encoding='utf-8') as f:
+                if header:
+                    for k, v in header.items():
+                        f.write(f"# {k}: {v}\n")
+                f.write('# ' + ' '.join(cols) + '\n')
+                for i in range(x.size):
+                    f.write(
+                        f"{x[i]:.6f} {Iprof[i]:.8e} {sigmaI[i]:.3e} {pol[i]:.8e} {sigma_pol[i]:.3e} {null1[i]:.8e} {sigma_null1[i]:.3e}\n"
+                    )
+            return
+        elif fth == 'lsd_i':
+            # RV Int sigma_int （严格 3 列）
+            sigma_int = np.zeros_like(Iprof) if sigmaI is None else sigmaI
+            cols = ["RV", "Int", "sigma_int"]
+            with open(filename, 'w', encoding='utf-8') as f:
+                if header:
+                    for k, v in header.items():
+                        f.write(f"# {k}: {v}\n")
+                f.write('# ' + ' '.join(cols) + '\n')
+                for i in range(x.size):
+                    f.write(f"{x[i]:.6f} {Iprof[i]:.8e} {sigma_int[i]:.3e}\n")
+            return
+        elif fth == 'lsd_i_simple':
+            # RV Int
+            cols = ["RV", "Int"]
+            with open(filename, 'w', encoding='utf-8') as f:
+                if header:
+                    for k, v in header.items():
+                        f.write(f"# {k}: {v}\n")
+                f.write('# ' + ' '.join(cols) + '\n')
+                for i in range(x.size):
+                    f.write(f"{x[i]:.6f} {Iprof[i]:.8e}\n")
+            return
+
+    # 已弃用：不再强制匹配输入文件结构；请使用 file_type_hint 指定输出结构。
+
+    if fmt == 'lsd' and pol_channel in ('V', 'Q', 'U') and include_null:
+        # 写出 LSD(pol) 7列格式：RV Int sigma_int Pol sigma_pol Null1 sigma_null1
+        if pol_channel == 'V':
+            pol = V if V is not None else np.zeros_like(Iprof)
+        elif pol_channel == 'Q':
+            pol = Q if Q is not None else np.zeros_like(Iprof)
+        else:
+            pol = U if U is not None else np.zeros_like(Iprof)
+        sigma_pol = sigmaI if sigmaI is not None else np.zeros_like(Iprof)
+        null1 = np.zeros_like(Iprof)
+        sigma_null1 = sigma_pol
+        cols = [
+            name_x, "Int", "sigma_int", "Pol", "sigma_pol", "Null1",
+            "sigma_null1"
+        ]
+        with open(filename, "w", encoding="utf-8") as f:
+            if header:
+                for k, v in header.items():
+                    f.write(f"# {k}: {v}\n")
+            f.write("# " + " ".join(cols) + "\n")
+            for i in range(x.size):
+                f.write(
+                    f"{x[i]:.6f} {Iprof[i]:.8e} {sigmaI[i]:.3e} {pol[i]:.8e} {sigma_pol[i]:.3e} {null1[i]:.8e} {sigma_null1[i]:.3e}\n"
+                )
+    else:
+        # 通用格式：RV/Wav Int sigma_int V Q U（永远写出 V/Q/U 列，缺失则填 0）
+        cols = [name_x, "Int", "sigma_int", "V", "Q", "U"]
+        Vw = np.zeros_like(Iprof) if V is None else V
+        Qw = np.zeros_like(Iprof) if Q is None else Q
+        Uw = np.zeros_like(Iprof) if U is None else U
+        with open(filename, "w", encoding="utf-8") as f:
+            if header:
+                for k, v in header.items():
+                    f.write(f"# {k}: {v}\n")
+            f.write("# " + " ".join(cols) + "\n")
+            for i in range(x.size):
+                f.write(
+                    f"{x[i]:.6f} {Iprof[i]:.8e} {sigmaI[i]:.3e} {Vw[i]:.8e} {Qw[i]:.8e} {Uw[i]:.8e}\n"
+                )
 
 
 def save_results_series(results: List[Tuple[np.ndarray, np.ndarray,

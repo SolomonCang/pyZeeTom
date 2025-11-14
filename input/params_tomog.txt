@@ -17,7 +17,7 @@
 # radius: stellar radius (R_sun), also used as reference radius r0 for differential rotation
 # r_out: outer disk radius (in units of stellar radius), used if Vmax=0
 # enable_occultation: 0=off, 1=on (compute stellar occultation mask for equatorial disk)
-1.0  1.0  0.0  2.0  0
+0.5  0.5  0.0  2.0  1
 
 #2 nRingsStellarGrid
 60
@@ -29,7 +29,7 @@ C  1.0  0
 1e-3
 
 #5 lineAmpConst  k_QU  enableV  enableQU
--0.5  1.0  1  1
+-0.5  1.0  1  0
 
 #6 initMagFromFile  initMagGeomFile (legacy flag + filename)
 0  none
@@ -51,16 +51,22 @@ C  1.0  0
 # lineParamFile: path to line parameters file (format: wl0 sigWl g)
 65000  lines.txt
 
-#12 velStart  velEnd  obsFileType
--300.0  300.0  lsd_i
+#12 velStart  velEnd  obsFileType  specType
+# obsFileType: observation file format hint (lsd_i, lsd_pol, spec_i, spec_pol, auto)
+# specType: data domain (auto=auto-detect, spec=wavelength domain, lsd=velocity domain)
+#   When specType=auto, SpecIO will automatically determine format and domain
+-300.0  300.0  spec_pol  specType=spec
 
 #13 jDateRef  (HJD0, reference epoch for phase calculation: phase = (HJD - HJD0) / period)
 0.5
 
-#14+ observation entries: filename  JD  velR
+#14+ observation entries: filename  JD  velR  [polchannel]
+# polchannel: I/V/Q/U (optional, default=V)
+#   I: Intensity only (output spec_i or lsd_i format, 3 columns)
+#   V/Q/U: Polarization (output spec_pol or lsd_pol format with specified Stokes component)
 # Example for 5 phases over 1 rotation period (0-1 day):
-obs/obs_phase_00.lsd  0.20  0.0
-obs/obs_phase_01.lsd  0.40  0.0
-obs/obs_phase_02.lsd  0.60  0.0
-obs/obs_phase_03.lsd  0.80  0.0
-obs/obs_phase_04.lsd  1.00  0.0
+input/inSpec/obs_phase_00.spec  0.20  0.0  I
+input/inSpec/obs_phase_00.spec  0.40  0.0  V
+input/inSpec/obs_phase_00.spec  0.60  0.0  Q
+input/inSpec/obs_phase_00.spec  0.80  0.0  U
+input/inSpec/obs_phase_00.spec  1.00  0.0  V

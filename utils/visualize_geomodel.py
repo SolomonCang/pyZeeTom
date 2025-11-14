@@ -1,363 +1,388 @@
-"""
-几何模型可视化工具
-------------------
-读取 geomodel.tomog 文件，可视化以下内容（3个子图横向排列）：
-1. 亮度分布（Stokes I，brightness map）
-2. 磁场视向分量 Blos（Stokes V）
-3. 磁场横向分量 Bperp 或 Q/U 信息
-
-用法示例：
-    python visualize_geomodel.py --model output/geomodel.tomog --out model_viz.png
-"""
+#!/usr/bin/env python
+"""Visualize geomodel.tomog files using core read_geomodel."""
 import argparse
 import sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import TwoSlopeNorm
-from types import SimpleNamespace
+from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
+from scipy.interpolate import griddata
 
-# 添加项目路径
 _root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_root / "core"))
+sys.path.insert(0, str(_root))
 
-# ======= 用户可在此区直接设置参数 =======
-MODEL_FILE = "/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/output/geomodel_test.tomog"  # 几何模型文件路径
-OUT_FIG = None  # 输出图片文件名，如"model_viz.png"，None则直接显示
-VMIN_BRIGHT = 0.5  # 亮度色标下限
-VMAX_BRIGHT = 1.5  # 亮度色标上限
-VMAX_BLOS = 500.0  # Blos色标范围（对称）
-VMAX_BPERP = 500.0  # Bperp色标上限
-CMAP_BRIGHT = "viridis"  # 亮度色标
-CMAP_BLOS = "RdBu_r"  # Blos色标（红蓝对称）
-CMAP_BPERP = "plasma"  # Bperp色标
-PROJECTION = "polar"  # 投影方式: "polar" (极坐标) 或 "cart" (笛卡尔)
-# ======================================
+from core.velspace_DiskIntegrator import VelspaceDiskIntegrator
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="几何模型可视化工具")
-    parser.add_argument('--model',
-                        type=str,
-                        default=MODEL_FILE,
-                        help='几何模型文件路径（geomodel.tomog）')
-    parser.add_argument('--out',
-                        type=str,
-                        default=OUT_FIG,
-                        help='输出图片文件名，不指定则直接显示')
-    parser.add_argument('--projection',
-                        type=str,
-                        default=PROJECTION,
-                        choices=['polar', 'cart'],
-                        help='投影方式：polar (极坐标) 或 cart (笛卡尔)')
-    return parser.parse_args()
+def create_brightness_colormap():
+    """
+    创建亮度色标：中心为白色（brightness=1），
+    低于1为蓝色（吸收），高于1为红色（发射）
+    """
+    colors = [
+        (0.0, 0.0, 1.0),  # 蓝色（吸收）
+        (1.0, 1.0, 1.0),  # 白色（归一化）
+        (1.0, 0.0, 0.0)  # 红色（发射）
+    ]
+    n_bins = 256
+    cmap = LinearSegmentedColormap.from_list('brightness', colors, N=n_bins)
+    return cmap
 
 
-def read_geomodel(filepath):
-    """读取几何模型文件"""
-    print(f"  读取文件: {filepath}")
+def plot_geomodel(geom,
+                  meta,
+                  table,
+                  projection='polar',
+                  out_fig=None,
+                  vmax_blos=500.0,
+                  vmax_bperp=500.0,
+                  smooth=False,
+                  grid_size=200):
+    """
+    Visualize geometry model with 3 panels.
+    
+    Parameters
+    ----------
+    smooth : bool
+        是否使用插值平滑（散点 vs 网格插值）
+    grid_size : int
+        插值网格分辨率
+    """
+    r = table['r']
+    phi = table['phi']
+    Blos = table.get('Blos', np.zeros_like(r))
+    Bperp = table.get('Bperp', np.zeros_like(r))
 
-    # 读取文件
-    data = []
-    inclination = None
-    vsini = None
-    phase = None
-
-    with open(filepath, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                # 尝试从注释中提取元数据
-                if 'Inclination:' in line:
-                    inclination = float(line.split(':')[1].strip())
-                elif 'Vsini:' in line:
-                    vsini = float(line.split(':')[1].strip())
-                elif 'Phase:' in line:
-                    phase = float(line.split(':')[1].strip())
-                continue
-            # 数据行: r phi area brightness Blos Bperp chi
-            parts = line.split()
-            if len(parts) >= 7:
-                data.append([float(x) for x in parts[:7]])
-
-    # 转为数组并返回模型对象
-    if not data:
-        raise ValueError("模型数据为空，无法可视化")
-    arr = np.array(data, dtype=float)
-    r = arr[:, 0]
-    phi = arr[:, 1]
-    area = arr[:, 2]
-    brightness = arr[:, 3]
-    Blos = arr[:, 4]
-    Bperp = arr[:, 5]
-    chi = arr[:, 6]
-
-    return SimpleNamespace(grid_r=r,
-                           grid_phi=phi,
-                           grid_area=area,
-                           brightness=brightness,
-                           Blos=Blos,
-                           Bperp=Bperp,
-                           chi=chi,
-                           inclination=inclination,
-                           vsini=vsini,
-                           phase=phase)
-
-
-def extract_model_fields(model):
-    """从model中提取可视化所需的场"""
-    r = model.grid_r
-    phi = model.grid_phi
-    area = model.grid_area
-    brightness = getattr(model, 'brightness', np.ones_like(r))
-    Blos = getattr(model, 'Blos', np.zeros_like(r))
-    Bperp = getattr(model, 'Bperp', np.zeros_like(r))
-    chi = getattr(model, 'chi', np.zeros_like(r))
-
-    x = r * np.cos(phi)
-    y = r * np.sin(phi)
-
-    return {
-        'r': r,
-        'phi': phi,
-        'x': x,
-        'y': y,
-        'area': area,
-        'brightness': brightness,
-        'Blos': Blos,
-        'Bperp': Bperp,
-        'chi': chi
-    }
-
-
-def plot_polar_map(ax,
-                   r,
-                   phi,
-                   values,
-                   vmin=None,
-                   vmax=None,
-                   cmap='viridis',
-                   title='',
-                   cbar_label='',
-                   norm=None):
-    """在极坐标系中绘制2D颜色图（按环逐段绘制，避免phi采样不一致导致的伪影）。"""
-    r = np.asarray(r)
-    phi = np.asarray(phi)
-    values = np.asarray(values)
-
-    # 唯一半径（环中心）
-    r_unique = np.unique(r)
-    r_unique.sort()
-    # 径向边界
-    if r_unique.size == 1:
-        dr = r_unique[0] * 0.05 if r_unique[0] > 0 else 0.05
-        r_edges = np.array([r_unique[0] - dr / 2, r_unique[0] + dr / 2])
+    if 'brightness' in table:
+        brightness = table['brightness']
+    elif 'Ic_weight' in table:
+        brightness = table['Ic_weight']
+        if np.max(brightness) > 0:
+            brightness = brightness / np.max(brightness)
     else:
-        r_mid = 0.5 * (r_unique[:-1] + r_unique[1:])
-        dr_in = r_mid[0] - r_unique[0]
-        dr_out = r_unique[-1] - r_mid[-1]
-        r_edges = np.concatenate([[r_unique[0] - dr_in], r_mid,
-                                  [r_unique[-1] + dr_out]])
+        brightness = np.ones_like(r)
 
-    last_mesh = None
-    for i_ring, r_c in enumerate(r_unique):
-        mask = np.isclose(r, r_c)
-        if not np.any(mask):
-            continue
-        phi_ring = phi[mask]
-        val_ring = values[mask]
-        order = np.argsort(phi_ring)
-        phi_ring = phi_ring[order]
-        val_ring = val_ring[order]
+    # 创建色标
+    bright_cmap = create_brightness_colormap()
+    bright_norm = TwoSlopeNorm(vmin=0.8, vcenter=1.0, vmax=1.2)
 
-        # phi 边界（周期封闭）
-        if phi_ring.size > 1:
-            phi_edges = np.empty(phi_ring.size + 1, dtype=float)
-            phi_edges[1:-1] = 0.5 * (phi_ring[:-1] + phi_ring[1:])
-            dphi_head = phi_ring[1] - phi_ring[0]
-            dphi_tail = phi_ring[-1] - phi_ring[-2]
-            phi_edges[0] = phi_ring[0] - dphi_head / 2
-            phi_edges[-1] = phi_ring[-1] + dphi_tail / 2
-        else:
-            w = np.deg2rad(10.0)
-            phi_edges = np.array([phi_ring[0] - w / 2, phi_ring[0] + w / 2])
+    fig = plt.figure(figsize=(18, 5))
 
-        r0 = r_edges[i_ring]
-        r1 = r_edges[i_ring + 1]
-        PHI, R = np.meshgrid(phi_edges, np.array([r0, r1]))
-        Z = val_ring[np.newaxis, :]
-        if norm is None:
-            last_mesh = ax.pcolormesh(PHI,
-                                      R,
-                                      Z,
-                                      cmap=cmap,
-                                      vmin=vmin,
-                                      vmax=vmax,
-                                      shading='flat')
-        else:
-            last_mesh = ax.pcolormesh(PHI,
-                                      R,
-                                      Z,
-                                      cmap=cmap,
-                                      norm=norm,
-                                      shading='flat')
-
-    # 将极坐标系统顺时针旋转180°（零角从北移到南）
-    ax.set_theta_zero_location('S')
-    ax.set_theta_direction(-1)
-    ax.set_title(title, pad=20, fontsize=12, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-
-    if last_mesh is not None:
-        cbar = plt.colorbar(last_mesh, ax=ax, pad=0.1, fraction=0.046)
-        cbar.set_label(cbar_label, rotation=270, labelpad=20)
-    return last_mesh
-
-
-def plot_cart_map(ax,
-                  x,
-                  y,
-                  values,
-                  vmin=None,
-                  vmax=None,
-                  cmap='viridis',
-                  title='',
-                  cbar_label='',
-                  norm=None):
-    """在笛卡尔坐标系中绘制散点图"""
-    # 将笛卡尔坐标顺时针旋转90°： (x', y') = (y, -x)
-    x_rot = y
-    y_rot = -x
-
-    if norm is None:
-        scatter = ax.scatter(x_rot,
-                             y_rot,
-                             c=values,
-                             cmap=cmap,
-                             vmin=vmin,
-                             vmax=vmax,
-                             s=30,
-                             edgecolors='none',
-                             alpha=0.8)
-    else:
-        scatter = ax.scatter(x_rot,
-                             y_rot,
-                             c=values,
-                             cmap=cmap,
-                             norm=norm,
-                             s=30,
-                             edgecolors='none',
-                             alpha=0.8)
-
-    ax.set_aspect('equal')
-    ax.set_xlabel('x (rotated)', fontsize=10)
-    ax.set_ylabel('y (rotated)', fontsize=10)
-    ax.set_title(title, pad=10, fontsize=12, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-
-    # 添加colorbar
-    cbar = plt.colorbar(scatter, ax=ax, pad=0.02, fraction=0.046)
-    cbar.set_label(cbar_label, rotation=270, labelpad=20)
-
-    return scatter
-
-
-def visualize_model(model_file, projection='polar', out_file=None):
-    """可视化几何模型的主函数"""
-    print(f"读取几何模型: {model_file}")
-
-    # 读取模型
-    model = read_geomodel(model_file)
-    fields = extract_model_fields(model)
-
-    print(f"  网格点数: {len(fields['r'])}")
-    print(f"  r 范围: [{fields['r'].min():.3f}, {fields['r'].max():.3f}]")
-    print(
-        f"  亮度范围: [{fields['brightness'].min():.3f}, {fields['brightness'].max():.3f}]"
-    )
-    print(
-        f"  Blos 范围: [{fields['Blos'].min():.1f}, {fields['Blos'].max():.1f}] G"
-    )
-    print(
-        f"  Bperp 范围: [{fields['Bperp'].min():.1f}, {fields['Bperp'].max():.1f}] G"
-    )
-
-    # 创建图形
     if projection == 'polar':
-        fig = plt.figure(figsize=(18, 6))
-        ax1 = fig.add_subplot(131, projection='polar')
-        ax2 = fig.add_subplot(132, projection='polar')
-        ax3 = fig.add_subplot(133, projection='polar')
-        axes = [ax1, ax2, ax3]
-        plot_func = plot_polar_map
-        coords = (fields['r'], fields['phi'])
-    else:
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        plot_func = plot_cart_map
-        coords = (fields['x'], fields['y'])
+        if smooth:
+            # 创建规则网格
+            phi_grid = np.linspace(0, 2 * np.pi, grid_size)
+            r_max = np.max(r)
+            r_grid = np.linspace(0, r_max, grid_size)
+            Phi_grid, R_grid = np.meshgrid(phi_grid, r_grid)
 
-    # 子图1: 亮度分布（Stokes I）
-    plot_func(axes[0],
-              coords[0],
-              coords[1],
-              fields['brightness'],
-              vmin=VMIN_BRIGHT,
-              vmax=VMAX_BRIGHT,
-              cmap=CMAP_BRIGHT,
-              title='Brightness (Stokes I)',
-              cbar_label='Relative Intensity')
+            # 插值
+            points = np.column_stack([phi, r])
+            Bright_grid = griddata(points,
+                                   brightness, (Phi_grid, R_grid),
+                                   method='cubic',
+                                   fill_value=1.0)
+            Blos_grid = griddata(points,
+                                 Blos, (Phi_grid, R_grid),
+                                 method='cubic',
+                                 fill_value=0.0)
+            Bperp_grid = griddata(points,
+                                  Bperp, (Phi_grid, R_grid),
+                                  method='cubic',
+                                  fill_value=0.0)
 
-    # 子图2: 磁场视向分量 Blos（Stokes V）
-    norm_blos = TwoSlopeNorm(vmin=-VMAX_BLOS, vcenter=0, vmax=VMAX_BLOS)
-    plot_func(axes[1],
-              coords[0],
-              coords[1],
-              fields['Blos'],
-              norm=norm_blos,
-              cmap=CMAP_BLOS,
-              title='Line-of-Sight B-field (Stokes V)',
-              cbar_label='B$_{los}$ [G]')
+            ax1 = fig.add_subplot(131, projection='polar')
+            ax2 = fig.add_subplot(132, projection='polar')
+            ax3 = fig.add_subplot(133, projection='polar')
 
-    # 子图3: 磁场横向分量 Bperp（Stokes Q/U）
-    plot_func(axes[2],
-              coords[0],
-              coords[1],
-              fields['Bperp'],
-              vmin=0,
-              vmax=VMAX_BPERP,
-              cmap=CMAP_BPERP,
-              title='Perpendicular B-field (Stokes Q/U)',
-              cbar_label='B$_{perp}$ [G]')
+            sc1 = ax1.pcolormesh(Phi_grid,
+                                 R_grid,
+                                 Bright_grid,
+                                 cmap=bright_cmap,
+                                 norm=bright_norm,
+                                 shading='auto')
+            ax1.set_title('Brightness (Absorption ← 1 → Emission)',
+                          fontsize=11,
+                          pad=20)
+            plt.colorbar(sc1,
+                         ax=ax1,
+                         fraction=0.046,
+                         pad=0.04,
+                         label='Brightness')
 
-    plt.tight_layout()
+            blos_norm = TwoSlopeNorm(vmin=-vmax_blos,
+                                     vcenter=0,
+                                     vmax=vmax_blos)
+            sc2 = ax2.pcolormesh(Phi_grid,
+                                 R_grid,
+                                 Blos_grid,
+                                 cmap='RdBu_r',
+                                 norm=blos_norm,
+                                 shading='auto')
+            ax2.set_title('Blos (Line-of-Sight B-field)', fontsize=11, pad=20)
+            plt.colorbar(sc2,
+                         ax=ax2,
+                         fraction=0.046,
+                         pad=0.04,
+                         label='Blos (G)')
 
-    if out_file:
-        fig.savefig(out_file, dpi=200, bbox_inches='tight')
-        print(f"✓ 已保存可视化图片至 {out_file}")
+            sc3 = ax3.pcolormesh(Phi_grid,
+                                 R_grid,
+                                 Bperp_grid,
+                                 cmap='plasma',
+                                 vmin=0,
+                                 vmax=vmax_bperp,
+                                 shading='auto')
+            ax3.set_title('Bperp (Transverse B-field)', fontsize=11, pad=20)
+            plt.colorbar(sc3,
+                         ax=ax3,
+                         fraction=0.046,
+                         pad=0.04,
+                         label='Bperp (G)')
+        else:
+            # 散点图模式
+            ax1 = fig.add_subplot(131, projection='polar')
+            ax2 = fig.add_subplot(132, projection='polar')
+            ax3 = fig.add_subplot(133, projection='polar')
+
+            sc1 = ax1.scatter(phi,
+                              r,
+                              c=brightness,
+                              s=5,
+                              cmap=bright_cmap,
+                              norm=bright_norm)
+            ax1.set_title('Brightness (Absorption ← 1 → Emission)',
+                          fontsize=11,
+                          pad=20)
+            plt.colorbar(sc1,
+                         ax=ax1,
+                         fraction=0.046,
+                         pad=0.04,
+                         label='Brightness')
+
+            blos_norm = TwoSlopeNorm(vmin=-vmax_blos,
+                                     vcenter=0,
+                                     vmax=vmax_blos)
+            sc2 = ax2.scatter(phi,
+                              r,
+                              c=Blos,
+                              s=5,
+                              cmap='RdBu_r',
+                              norm=blos_norm)
+            ax2.set_title('Blos (Line-of-Sight B-field)', fontsize=11, pad=20)
+            plt.colorbar(sc2,
+                         ax=ax2,
+                         fraction=0.046,
+                         pad=0.04,
+                         label='Blos (G)')
+
+            sc3 = ax3.scatter(phi,
+                              r,
+                              c=Bperp,
+                              s=5,
+                              cmap='plasma',
+                              vmin=0,
+                              vmax=vmax_bperp)
+            ax3.set_title('Bperp (Transverse B-field)', fontsize=11, pad=20)
+            plt.colorbar(sc3,
+                         ax=ax3,
+                         fraction=0.046,
+                         pad=0.04,
+                         label='Bperp (G)')
+
+    else:  # Cartesian
+        x = r * np.cos(phi)
+        y = r * np.sin(phi)
+
+        if smooth:
+            # 创建规则网格
+            x_min, x_max = np.min(x), np.max(x)
+            y_min, y_max = np.min(y), np.max(y)
+            xi = np.linspace(x_min, x_max, grid_size)
+            yi = np.linspace(y_min, y_max, grid_size)
+            Xi, Yi = np.meshgrid(xi, yi)
+
+            # 插值
+            points = np.column_stack([x, y])
+            Bright_grid = griddata(points,
+                                   brightness, (Xi, Yi),
+                                   method='cubic',
+                                   fill_value=1.0)
+            Blos_grid = griddata(points,
+                                 Blos, (Xi, Yi),
+                                 method='cubic',
+                                 fill_value=0.0)
+            Bperp_grid = griddata(points,
+                                  Bperp, (Xi, Yi),
+                                  method='cubic',
+                                  fill_value=0.0)
+
+            ax1 = fig.add_subplot(131)
+            ax2 = fig.add_subplot(132)
+            ax3 = fig.add_subplot(133)
+
+            sc1 = ax1.pcolormesh(Xi,
+                                 Yi,
+                                 Bright_grid,
+                                 cmap=bright_cmap,
+                                 norm=bright_norm,
+                                 shading='auto')
+            ax1.set_title('Brightness')
+            ax1.set_xlabel('x (R*)')
+            ax1.set_ylabel('y (R*)')
+            ax1.set_aspect('equal')
+            plt.colorbar(sc1, ax=ax1, fraction=0.046, pad=0.04)
+
+            blos_norm = TwoSlopeNorm(vmin=-vmax_blos,
+                                     vcenter=0,
+                                     vmax=vmax_blos)
+            sc2 = ax2.pcolormesh(Xi,
+                                 Yi,
+                                 Blos_grid,
+                                 cmap='RdBu_r',
+                                 norm=blos_norm,
+                                 shading='auto')
+            ax2.set_title('Blos (G)')
+            ax2.set_xlabel('x (R*)')
+            ax2.set_ylabel('y (R*)')
+            ax2.set_aspect('equal')
+            plt.colorbar(sc2, ax=ax2, fraction=0.046, pad=0.04)
+
+            sc3 = ax3.pcolormesh(Xi,
+                                 Yi,
+                                 Bperp_grid,
+                                 cmap='plasma',
+                                 vmin=0,
+                                 vmax=vmax_bperp,
+                                 shading='auto')
+            ax3.set_title('Bperp (G)')
+            ax3.set_xlabel('x (R*)')
+            ax3.set_ylabel('y (R*)')
+            ax3.set_aspect('equal')
+            plt.colorbar(sc3, ax=ax3, fraction=0.046, pad=0.04)
+        else:
+            # 散点图模式
+            ax1 = fig.add_subplot(131)
+            ax2 = fig.add_subplot(132)
+            ax3 = fig.add_subplot(133)
+
+            sc1 = ax1.scatter(x,
+                              y,
+                              c=brightness,
+                              s=5,
+                              cmap=bright_cmap,
+                              norm=bright_norm)
+            ax1.set_title('Brightness')
+            ax1.set_xlabel('x (R*)')
+            ax1.set_ylabel('y (R*)')
+            ax1.set_aspect('equal')
+            plt.colorbar(sc1, ax=ax1, fraction=0.046, pad=0.04)
+
+            blos_norm = TwoSlopeNorm(vmin=-vmax_blos,
+                                     vcenter=0,
+                                     vmax=vmax_blos)
+            sc2 = ax2.scatter(x, y, c=Blos, s=5, cmap='RdBu_r', norm=blos_norm)
+            ax2.set_title('Blos (G)')
+            ax2.set_xlabel('x (R*)')
+            ax2.set_ylabel('y (R*)')
+            ax2.set_aspect('equal')
+            plt.colorbar(sc2, ax=ax2, fraction=0.046, pad=0.04)
+
+            sc3 = ax3.scatter(x,
+                              y,
+                              c=Bperp,
+                              s=5,
+                              cmap='plasma',
+                              vmin=0,
+                              vmax=vmax_bperp)
+            ax3.set_title('Bperp (G)')
+            ax3.set_xlabel('x (R*)')
+            ax3.set_ylabel('y (R*)')
+            ax3.set_aspect('equal')
+            plt.colorbar(sc3, ax=ax3, fraction=0.046, pad=0.04)
+
+    info = []
+    if 'iteration' in meta: info.append(f"iter={meta['iteration']}")
+    if 'chi2' in meta: info.append(f"chi2={meta['chi2']:.2f}")
+    if 'entropy' in meta: info.append(f"S={meta['entropy']:.4f}")
+    if info:
+        fig.text(0.5,
+                 0.95,
+                 " | ".join(info),
+                 ha='center',
+                 va='top',
+                 fontsize=10)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+
+    if out_fig:
+        plt.savefig(out_fig, dpi=150, bbox_inches='tight')
+        print(f"Figure saved: {out_fig}")
     else:
         plt.show()
-
-    return fig, axes
+    plt.close()
 
 
 def main():
-    args = parse_args()
+    parser = argparse.ArgumentParser(
+        description="Visualize tomography geometric model")
+    parser.add_argument('--model',
+                        type=str,
+                        default='test_output/geomodel_phase_00.tomog',
+                        help='Model file path')
+    parser.add_argument('--out',
+                        type=str,
+                        default=None,
+                        help='Output figure filename')
+    parser.add_argument('--projection',
+                        type=str,
+                        default='polar',
+                        choices=['polar', 'cart'],
+                        help='Projection type')
+    parser.add_argument('--vmax_blos',
+                        type=float,
+                        default=500.0,
+                        help='Blos colorbar range')
+    parser.add_argument('--vmax_bperp',
+                        type=float,
+                        default=500.0,
+                        help='Bperp colorbar max')
+    parser.add_argument('--smooth',
+                        action='store_true',
+                        help='Use interpolation for smooth visualization')
+    parser.add_argument('--grid-size',
+                        type=int,
+                        default=200,
+                        help='Grid size for interpolation (default: 200)')
+    args = parser.parse_args()
 
-    model_file = Path(args.model)
-    if not model_file.exists():
-        print(f"错误：模型文件不存在: {model_file}")
-        sys.exit(1)
+    if not Path(args.model).exists():
+        print(f"Error: {args.model} not found")
+        return 1
 
+    print(f"Reading {args.model}...")
     try:
-        visualize_model(model_file,
-                        projection=args.projection,
-                        out_file=args.out)
+        geom, meta, table = VelspaceDiskIntegrator.read_geomodel(args.model)
+        print(f"Loaded {len(table['r'])} pixels")
+        mode = "smooth" if args.smooth else "scatter"
+        print(f"Rendering ({mode} mode, projection={args.projection})...")
+        plot_geomodel(geom,
+                      meta,
+                      table,
+                      args.projection,
+                      args.out,
+                      args.vmax_blos,
+                      args.vmax_bperp,
+                      smooth=args.smooth,
+                      grid_size=args.grid_size)
+        print("Done.")
     except Exception as e:
-        print(f"可视化失败: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())

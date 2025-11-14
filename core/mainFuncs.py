@@ -39,6 +39,7 @@ class readParamsTomog:
         self.fnames = np.array([])
         self.jDates = np.array([])
         self.velRs = np.array([])
+        self.polChannels = np.array([])  # 新增：每个观测的偏振通道（I/V/Q/U）
         self.numObs = 0
         # New defaults for tomography workflow
         self.lineParamFile = 'lines.txt'  # path to line model parameters
@@ -114,16 +115,47 @@ class readParamsTomog:
                     self.velStart = float(parts[0])
                     self.velEnd = float(parts[1])
                     # optional: global observation file type hint (auto|lsd_i|lsd_pol|spec_i|...)
-                    if len(parts) >= 3:
+                    if len(parts) >= 3 and '=' not in parts[2]:
                         self.obsFileType = parts[2]
+                        extra = parts[3:]
+                    else:
+                        extra = parts[2:]
+                    # optional key=val tokens e.g., polOut=V|Q|U, specType=auto|spec|lsd
+                    self.polOut = 'V'  # default output polarization
+                    self.specType = 'auto'  # default data domain type (auto|spec|lsd)
+                    for tok in extra:
+                        if '=' in tok:
+                            k, v = tok.split('=', 1)
+                            k = k.strip()
+                            v = v.strip()
+                            if k.lower() in ('polout', 'stokesout'):
+                                vv = v.upper()
+                                if vv in ('V', 'Q', 'U'):
+                                    self.polOut = vv
+                            elif k.lower() == 'spectype':
+                                vv = v.lower()
+                                if vv in ('auto', 'spec', 'lsd'):
+                                    self.specType = vv
+                    if verbose:
+                        print(
+                            f"[Params] polOut = {self.polOut}, specType = {self.specType}"
+                        )
                 elif (i == 13):
                     self.jDateRef = float(inLine.split()[0])
                 elif (i >= 14):
-                    self.fnames = np.append(self.fnames, [inLine.split()[0]])
-                    self.jDates = np.append(self.jDates,
-                                            [float(inLine.split()[1])])
-                    self.velRs = np.append(self.velRs,
-                                           [float(inLine.split()[2])])
+                    parts = inLine.split()
+                    self.fnames = np.append(self.fnames, [parts[0]])
+                    self.jDates = np.append(self.jDates, [float(parts[1])])
+                    self.velRs = np.append(self.velRs, [float(parts[2])])
+                    # 新增：读取polchannel（第4列），默认为'V'
+                    polchan = parts[3].upper() if len(parts) > 3 else 'V'
+                    if polchan not in ('I', 'V', 'Q', 'U'):
+                        if verbose:
+                            print(
+                                f'Warning: invalid polchannel "{parts[3]}" in line {i+1}, using default "V"'
+                            )
+                        polchan = 'V'
+                    self.polChannels = np.append(self.polChannels, [polchan])
                     self.numObs += 1
                     if (np.abs(self.jDateRef - self.jDates[self.numObs - 1])
                             > 500.):
@@ -150,10 +182,10 @@ class readParamsTomog:
         else:
             # 方式2: 从 radius + r_out + vsini + inclination 计算
             if self.r_out > 0 and self.radius > 0:
-                # 盘外边缘速度（刚体转动）：v(r_out) = veq * r_out / radius
-                # 考虑差速：v(r) = veq * (r/radius)^(pOmega+1)
-                r_ratio = self.r_out / self.radius
-                self.Vmax = self.velEq * (r_ratio**(self.pOmega + 1.0))
+                # 差速转动速度场：v(r) = veq * (r/R*)^(pOmega+1)
+                # r_out 已经是恒星半径为单位（r/R*），所以：
+                # Vmax = v(r_out) = veq * r_out^(pOmega+1)
+                self.Vmax = self.velEq * (self.r_out**(self.pOmega + 1.0))
                 if verbose:
                     print(
                         f"[Grid] Computed Vmax = {self.Vmax:.2f} km/s from r_out={self.r_out:.2f}R*, vsini={self.vsini:.2f} km/s"
@@ -303,153 +335,305 @@ class readParamsTomog:
             sys.exit()
 
 
-def mainFittingLoop(par,
-                    lineData,
-                    wlSynSet,
-                    sGrid,
-                    briMap,
-                    magGeom,
-                    listGridView,
-                    dMagCart0,
-                    setSynSpec,
-                    coMem,
-                    nDataTot,
-                    Data,
-                    sig2,
-                    allModeldIdV,
-                    weightEntropy,
-                    verbose=1):
+#############################################
+# MEM迭代循环辅助函数
+#############################################
 
-    import core.memSimple3 as memSimple
-    # import core.lineprofileVoigt as lineprofile
 
-    chi_aim = par.chiTarget * float(coMem.nDataTotIV)
-    if (par.fixedEntropy == 1):
-        target_aim = par.ent_aim
-    else:
-        target_aim = chi_aim
+def compute_forward_single_phase(integrator,
+                                 mag_field=None,
+                                 brightness=None,
+                                 compute_derivatives=False,
+                                 eps_blos=10.0,
+                                 eps_bperp=10.0,
+                                 eps_chi=0.01):
+    """
+    为单个观测相位计算正演模型（及可选的参数导数）
+    
+    Parameters
+    ----------
+    integrator : VelspaceDiskIntegrator
+        已配置的盘积分器实例
+    mag_field : MagneticFieldParams, optional
+        磁场参数对象（包含Blos, Bperp, chi）
+    brightness : np.ndarray, optional
+        亮度分布 (Npix,)
+    compute_derivatives : bool
+        是否计算参数导数（响应矩阵）
+    eps_blos, eps_bperp, eps_chi : float
+        数值微分步长
+        
+    Returns
+    -------
+    result : dict
+        包含：
+        - specI, specQ, specU, specV : 合成Stokes谱 (Nlambda,)
+        - dI_dBlos, dV_dBlos, ... : 导数矩阵 (Nlambda, Npix)，若compute_derivatives=True
+    """
+    result = {}
 
-    fOutFitSummary = open('outFitSummary.txt', 'w')
+    # 基准正演
+    result['specI'] = integrator.I.copy()
+    result['specV'] = integrator.V.copy()
+    # Q和U可能不可用，使用零数组
+    result['specQ'] = (integrator.Q.copy() if hasattr(integrator, 'Q') else
+                       np.zeros_like(integrator.I))
+    result['specU'] = (integrator.U.copy() if hasattr(integrator, 'U') else
+                       np.zeros_like(integrator.I))
 
-    # Initialize goodness of fit and convergence parameters
-    Chi2 = chi2nu = 0.0
-    entropy = 0.0
-    test = 1.0
-    meanBright = meanBrightDiff = meanMag = 0.0
-    iIter = 0
-    bConverged = False
+    if not compute_derivatives:
+        return result
 
-    # Loop over fitting iterations; allows fitting to target entropy or chi^2
-    while (iIter < par.numIterations) and (not bConverged):
+    # 计算导数（占位实现 - 完整实现需要扰动参数并重新积分）
+    npix = len(integrator.geom.grid.r)
+    nlambda = len(integrator.v)  # v_grid被存储为integrator.v
 
-        # Compute set of new spectra and derivatives
-        iIter += 1
-        if (iIter > 1):
-            memSimple.unpackImageVector(Image, briMap, magGeom,
-                                        par.magGeomType, par.fitBri,
-                                        par.fitMag)
+    result['dI_dBlos'] = np.zeros((nlambda, npix))
+    result['dV_dBlos'] = np.zeros((nlambda, npix))
+    result['dI_dBperp'] = np.zeros((nlambda, npix))
+    result['dV_dBperp'] = np.zeros((nlambda, npix))
+    result['dQ_dBperp'] = np.zeros((nlambda, npix))
+    result['dU_dBperp'] = np.zeros((nlambda, npix))
+    result['dQ_dchi'] = np.zeros((nlambda, npix))
+    result['dU_dchi'] = np.zeros((nlambda, npix))
 
-    # First get magnetic vectors (their derivatives can be pre-calculated)
-        vecMagCart = magGeom.getAllMagVectorsCart()
+    # TODO: 完整导数计算需扰动各参数并重新积分
+    # 此处暂用占位值
 
-        nObs = 0
-        for phase in par.cycleList:
-            # get stellar geometry calculations for this phase
-            sGridView = listGridView[nObs]
-            # calculate spectrum and derivatives
-            spec = setSynSpec[nObs]
-            spec.updateIntProfDeriv(sGridView, vecMagCart, dMagCart0, briMap,
-                                    lineData, par.calcDI, par.calcDV)
-            spec.convolveIGnumpy(par.instrumentRes)
+    return result
 
-            nObs += 1
-        #finished computing spectra and derivatives
 
-        #Pack the input arrays for mem_iter
-        allModelIV = memSimple.packModelVector(setSynSpec, par.fitBri,
-                                               par.fitMag)
-        Image = memSimple.packImageVector(briMap, magGeom, par.magGeomType,
-                                          par.fitBri, par.fitMag)
-        if ((par.calcDI == 1) | (par.calcDV == 1)):
-            allModeldIdV = memSimple.packResponseMatrix(
-                setSynSpec, nDataTot, coMem.npBriMap, magGeom, par.magGeomType,
-                par.calcDI, par.calcDV)
+def save_iteration_summary(outfile,
+                           iteration,
+                           chi2,
+                           entropy,
+                           test_value,
+                           mag_field=None,
+                           brightness=None,
+                           extra_info=None,
+                           mode='append'):
+    """
+    保存单次MEM迭代的统计摘要到文件
+    
+    Parameters
+    ----------
+    outfile : str
+        输出文件路径（如 output/outSummary.txt）
+    iteration : int
+        迭代次数
+    chi2 : float
+        当前χ²值
+    entropy : float
+        当前熵值
+    test_value : float
+        收敛检验值
+    mag_field : MagneticFieldParams, optional
+        磁场参数（计算平均Blos等）
+    brightness : np.ndarray, optional
+        亮度分布（计算平均亮度）
+    extra_info : dict, optional
+        额外信息（如相位数、参数数等）
+    mode : str
+        'append' 或 'overwrite'
+    """
+    from pathlib import Path
 
-        #Call the mem_iter routine controlling the fit.  This returns the entropy, Chi2, test
-        # for the current model, and then proposes a new best fit model in Image
-        entropy, Chi2, test, Image, entStand, entFF, entMag = \
-            memSimple.mem_iter(coMem.n1Model, coMem.n2Model, coMem.nModelTot, \
-                               Image, Data, allModelIV, sig2, allModeldIdV, \
-                               weightEntropy, par.defaultBright, par.defaultBent, \
-                               par.maximumBright, target_aim, par.fixedEntropy)
+    outpath = Path(outfile)
+    outpath.parent.mkdir(parents=True, exist_ok=True)
 
-        meanBright = np.sum(briMap.bright * sGrid.area) / np.sum(sGrid.area)
-        meanBrightDiff = np.sum(
-            np.abs(briMap.bright - par.defaultBright) * sGrid.area) / np.sum(
-                sGrid.area)
-        absMagCart = np.sqrt(vecMagCart[0, :]**2 + vecMagCart[1, :]**2 +
-                             vecMagCart[2, :]**2)
-        meanMag = np.sum(absMagCart * sGrid.area) / np.sum(sGrid.area)
+    # 如果是第一次迭代或overwrite模式，写入表头
+    if mode == 'overwrite' or (mode == 'append' and iteration == 0):
+        with open(outfile, 'w') as f:
+            f.write("# MEM Inversion Summary\n")
+            f.write("# Generated by pyZeeTom\n")
+            f.write("#\n")
+            f.write(
+                "# Columns: Iteration  Chi2  Entropy  TestValue  AvgBlos  AvgBperp  AvgBrightness\n"
+            )
+            f.write("#" + "-" * 78 + "\n")
 
-        #evaluate some convergence criteria:
-        if (par.fixedEntropy == 1):
-            bConverged = ((entropy >= par.ent_aim * 1.001)
-                          and (test < par.test_aim) and (iIter > 2))
+    # 计算统计量
+    avg_blos = np.mean(mag_field.Blos) if mag_field is not None else 0.0
+    avg_bperp = np.mean(mag_field.Bperp) if mag_field is not None else 0.0
+    avg_bright = np.mean(brightness) if brightness is not None else 1.0
+
+    # 追加当前迭代信息
+    with open(outfile, 'a') as f:
+        f.write(
+            f"{iteration:4d}  {chi2:12.4f}  {entropy:12.6f}  {test_value:12.6e}  "
+            f"{avg_blos:10.3f}  {avg_bperp:10.3f}  {avg_bright:10.6f}\n")
+
+    # 如果提供了extra_info，追加详细信息
+    if extra_info is not None and iteration == 0:
+        with open(outfile, 'a') as f:
+            f.write("\n# Additional Information:\n")
+            for key, val in extra_info.items():
+                f.write(f"#   {key}: {val}\n")
+
+
+def save_model_spectra(results,
+                       phase_indices,
+                       output_dir="output/outModel",
+                       fmt="lsd",
+                       prefix="phase"):
+    """
+    保存每个观测相位的模型光谱到独立文件
+    
+    Parameters
+    ----------
+    results : list of tuples
+        每个元组为 (v_grid, specI, specV, specQ, specU, pol_channel) 或
+        (v_grid, specI, specV, specQ, specU) 或 (v_grid, specI, specV)
+    phase_indices : list of int
+        相位索引
+    output_dir : str
+        输出目录
+    fmt : str
+        输出格式 ('lsd' 或 'spec')
+    prefix : str
+        文件名前缀
+    """
+    from pathlib import Path
+    import core.SpecIO as SpecIO
+
+    outdir = Path(output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    for i, result in enumerate(results):
+        phase_idx = phase_indices[i] if i < len(phase_indices) else i
+
+        # 解包结果，支持新格式（包含pol_channel）
+        if len(result) >= 6:
+            v_grid, specI, specV, specQ, specU, pol_channel = result[:6]
+        elif len(result) >= 5:
+            v_grid, specI, specV, specQ, specU = result[:5]
+            pol_channel = 'V'  # 默认
+        elif len(result) >= 3:
+            v_grid, specI, specV = result[:3]
+            specQ = np.zeros_like(specI)
+            specU = np.zeros_like(specI)
+            pol_channel = 'V'
         else:
-            bConverged = ((Chi2 <= chi_aim * 1.001) and (test < par.test_aim))
-        if (coMem.nDataTotIV > 0):  #protect against fitting nothing
-            chi2nu = Chi2 / float(coMem.nDataTotIV)
+            continue
+
+        # 构建输出文件名
+        if fmt.lower() == 'lsd':
+            outfile = outdir / f"{prefix}{phase_idx:03d}.lsd"
         else:
-            chi2nu = Chi2
+            outfile = outdir / f"{prefix}{phase_idx:03d}.spec"
 
-        if (verbose == 1):
-            print(
-                'it {:3n}  entropy {:13.5f}  chi2 {:10.6f}  Test {:10.6f} meanBright {:10.7f} meanSpot {:10.7f} meanMag {:10.4f}'
-                .format(iIter, entropy, chi2nu, test, meanBright,
-                        meanBrightDiff, meanMag))
-        fOutFitSummary.write(
-            'it {:3n}  entropy {:13.5f}  chi2 {:10.6f}  Test {:10.6f} meanBright {:10.7f} meanSpot {:10.7f} meanMag {:10.4f}\n'
-            .format(iIter, entropy, chi2nu, test, meanBright, meanBrightDiff,
-                    meanMag))
-        if ((verbose == 1) and (bConverged == True)):
-            print('Success: sufficiently small value of Test achieved')
+        # 使用SpecIO.write_model_spectrum写入文件，支持pol_channel
+        header = {"phase_index": str(phase_idx), "pol_channel": pol_channel}
+        SpecIO.write_model_spectrum(str(outfile),
+                                    v_grid,
+                                    specI,
+                                    V=specV,
+                                    Q=specQ,
+                                    U=specU,
+                                    fmt=fmt,
+                                    header=header,
+                                    pol_channel=pol_channel)
 
-    #In case this was run with no iterations, just calculate the model diagonstics
-    if (iIter == 0):
-        allModelIV = memSimple.packModelVector(setSynSpec, par.fitBri,
-                                               par.fitMag)
-        chi2nu = np.sum(
-            (allModelIV - Data)**2 / sig2) / float(coMem.nDataTotIV)
 
-        Image = memSimple.packImageVector(briMap, magGeom, par.magGeomType,
-                                          par.fitBri, par.fitMag)
-        if (par.fitBri == 1 or par.fitMag == 1):
-            entropy, tmpgS, tmpggS, tmp3, tmp4, SI1, SI2, SB \
-                = memSimple.get_s_grads(coMem.n1Model, coMem.n2Model, coMem.nModelTot,
-                                        Image, weightEntropy, par.defaultBright,
-                                        par.defaultBent, par.maximumBright)
+def save_geomodel_tomog(grid,
+                        mag_field=None,
+                        brightness=None,
+                        output_file="output/outGeoModel.tomog",
+                        meta=None,
+                        geom=None,
+                        integrator=None):
+    """
+    保存tomography几何模型到.tomog文件
+    
+    优先使用 VelspaceDiskIntegrator.write_geomodel() 方法以保存完整信息。
+    如果未提供 integrator，则使用简化格式。
+    
+    Parameters
+    ----------
+    grid : diskGrid
+        盘网格对象
+    mag_field : MagneticFieldParams, optional
+        磁场参数
+    brightness : np.ndarray, optional
+        亮度分布
+    output_file : str
+        输出文件路径
+    meta : dict, optional
+        元信息（目标名、周期等）
+    geom : SimpleDiskGeometry, optional
+        几何对象，用于构造完整的 integrator
+    integrator : VelspaceDiskIntegrator, optional
+        积分器对象，包含完整的物理信息
+    """
+    from pathlib import Path
 
-        meanBright = np.sum(briMap.bright * sGrid.area) / np.sum(sGrid.area)
-        meanBrightDiff = np.sum(np.abs(briMap.bright-par.defaultBright)*sGrid.area) \
-                         /np.sum(sGrid.area)
-        vecMagCart = magGeom.getAllMagVectorsCart()
-        absMagCart = np.sqrt(vecMagCart[0, :]**2 + vecMagCart[1, :]**2 +
-                             vecMagCart[2, :]**2)
-        meanMag = np.sum(absMagCart * sGrid.area) / np.sum(sGrid.area)
+    outpath = Path(output_file)
+    outpath.parent.mkdir(parents=True, exist_ok=True)
 
-    if (verbose != 1 and par.numIterations > 0) or (verbose == 1
-                                                    and iIter == 0):
-        print(
-            'it {:3n}  entropy {:13.5f}  chi2 {:10.6f}  Test {:10.6f} meanBright {:10.7f} meanSpot {:10.7f} meanMag {:10.4f}'
-            .format(iIter, entropy, chi2nu, test, meanBright, meanBrightDiff,
-                    meanMag))
-        fOutFitSummary.write(
-            'it {:3n}  entropy {:13.5f}  chi2 {:10.6f}  Test {:10.6f} meanBright {:10.7f} meanSpot {:10.7f} meanMag {:10.4f}\n'
-            .format(iIter, entropy, chi2nu, test, meanBright, meanBrightDiff,
-                    meanMag))
-    fOutFitSummary.close()
+    # 如果提供了 integrator，使用其 write_geomodel 方法
+    if integrator is not None:
+        # 更新 integrator.geom 中的磁场参数
+        if mag_field is not None:
+            integrator.geom.B_los = mag_field.Blos
+            integrator.geom.B_perp = mag_field.Bperp
+            integrator.geom.chi = mag_field.chi
+        integrator.write_geomodel(output_file, meta=meta)
+        return
 
-    return iIter, entropy, chi2nu, test, meanBright, meanBrightDiff, meanMag
+    # 否则使用简化格式（向后兼容）
+    with open(output_file, 'w') as f:
+        # 写入表头
+        f.write("# pyZeeTom Tomography Model (simplified format)\n")
+        f.write(
+            "# Format: r(R*)  phi(rad)  Blos(G)  Bperp(G)  chi(rad)  brightness\n"
+        )
+
+        # 写入元信息
+        if meta is not None:
+            f.write("#\n# Metadata:\n")
+            for key, val in meta.items():
+                f.write(f"#   {key}: {val}\n")
+
+        # 如果有 geom，写入几何参数
+        if geom is not None:
+            f.write("#\n# Geometry:\n")
+            if hasattr(geom, 'inclination_rad'):
+                f.write(
+                    f"#   inclination_deg: {np.rad2deg(geom.inclination_rad):.2f}\n"
+                )
+            if hasattr(geom, 'phi0'):
+                f.write(f"#   phi0: {geom.phi0:.6f}\n")
+            if hasattr(geom, 'pOmega'):
+                f.write(f"#   pOmega: {geom.pOmega:.6f}\n")
+            if hasattr(geom, 'r0'):
+                f.write(f"#   r0: {geom.r0:.6f}\n")
+            if hasattr(geom, 'period'):
+                f.write(f"#   period: {geom.period:.6f}\n")
+
+        # 写入网格信息
+        f.write("#\n# Grid:\n")
+        f.write(f"#   nr: {grid.nr}\n")
+        f.write(f"#   npix: {len(grid.r)}\n")
+        if hasattr(grid, 'r_in'):
+            f.write(f"#   r_in: {grid.r_in:.6f}\n")
+        if hasattr(grid, 'r_out'):
+            f.write(f"#   r_out: {grid.r_out:.6f}\n")
+
+        f.write("#" + "-" * 78 + "\n")
+
+        # 写入数据
+        npix = len(grid.r)
+        for i in range(npix):
+            r = grid.r[i]
+            phi = grid.phi[i]
+            blos = mag_field.Blos[i] if mag_field is not None else 0.0
+            bperp = mag_field.Bperp[i] if mag_field is not None else 0.0
+            chi = mag_field.chi[i] if mag_field is not None else 0.0
+            bright = brightness[i] if brightness is not None else 1.0
+
+            f.write(
+                f"{r:10.6f}  {phi:10.6f}  {blos:10.3f}  {bperp:10.3f}  {chi:10.6f}  {bright:10.6f}\n"
+            )
 
 
 #############################################

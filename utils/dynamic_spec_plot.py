@@ -1,280 +1,203 @@
-"""
-动态谱批量绘制工具
-------------------
-用法示例：
-    python dynamic_spec_plot.py --spec_dir input/inSpec --param_file input/params_tomog.txt --out dynamic_spec.png
+#!/usr/bin/env python
+"""Dynamic spectrum visualization tool.
 
-- 支持 LSD 格式（I 或 pol），自动识别文件夹下所有光谱文件
-- 根据参数文件自动换算相位
-- 依赖 Dynamic_spec.py 工具库
+使用项目标准接口读取光谱数据：
+- core.mainFuncs.readParamsTomog 读取参数文件，获取相位/JD信息
+- core.SpecIO.loadObsProfile 读取观测光谱
+- 支持模型光谱（从 output/outModel）和观测光谱的可视化
 """
 import argparse
 import sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import TwoSlopeNorm
 
-# ======= 用户可在此区直接设置参数 =======
-SPEC_DIR = "input/inSpec"  # 光谱文件夹路径
-PARAM_FILE = "input/params_tomog.txt"  # 参数文件路径
-OUT_FIG = None  # 输出图片文件名，如"dynamic_spec.png"，None则直接显示
-FILE_TYPE = "auto"  # 光谱文件类型：auto/lsd_i/lsd_pol
-SORT_BY_PHASE = False  # 是否按相位排序
-# ======================================
-
-# 确保依赖库路径优先
 _root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str('/Users/tianqi/Documents/Codes_collection/tinyTools'))
-sys.path.insert(0, str(_root / "core"))
-from Dynamic_spec import IrregularDynamicSpectrum, load_lsd_spectra
-from mainFuncs import readParamsTomog
+sys.path.insert(0, str(_root))
+
+from utils.dynamic_spectrum import IrregularDynamicSpectrum
+from core.mainFuncs import readParamsTomog, compute_phase_from_jd
+from core.SpecIO import loadObsProfile
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="批量光谱转动态谱工具")
-    parser.add_argument('--spec_dir',
-                        type=str,
-                        default=SPEC_DIR,
-                        help='光谱文件夹路径')
-    parser.add_argument('--param_file',
-                        type=str,
-                        default=PARAM_FILE,
-                        help='参数文件路径（如input/params_tomog.txt）')
-    parser.add_argument('--out',
-                        type=str,
-                        default=OUT_FIG,
-                        help='输出图片文件名（如dynamic_spec.png），不指定则直接显示')
-    parser.add_argument('--file_type',
-                        type=str,
-                        default=FILE_TYPE,
-                        help='光谱文件类型：auto/lsd_i/lsd_pol')
-    parser.add_argument('--sort_by_phase',
-                        action='store_true',
-                        default=SORT_BY_PHASE,
-                        help='按相位排序（默认按JD）')
-    return parser.parse_args()
+def load_model_spectra(model_dir, params_file, stokes='I', file_type='auto'):
+    """使用标准接口加载模型光谱。
+    
+    Args:
+        model_dir: 模型光谱目录（如 output/outModel）
+        params_file: 参数文件路径（如 input/params_tomog.txt）
+        stokes: Stokes 参数 ('I', 'V', 'Q', 'U')
+        file_type: 文件类型提示（'auto', 'lsd_i', 'spec_i', etc.）
+    
+    Returns:
+        times: 相位数组
+        xs: 速度/波长数组列表
+        intensities: 光谱强度列表
+    """
+    model_dir = Path(model_dir)
 
+    # 从参数文件读取相位信息
+    params = readParamsTomog(params_file, verbose=0)
+    phases = compute_phase_from_jd(params.jDates, params.jDateRef,
+                                   params.period)
 
-def get_phase_from_jd(jd, jd_ref, period):
-    return (np.asarray(jd) - float(jd_ref)) / float(period)
+    print(f"  Loaded {params.numObs} observations from params")
+    print(f"  JD range: {params.jDates[0]:.2f} - {params.jDates[-1]:.2f}")
+    print(f"  Phase range: {phases[0]:.3f} - {phases[-1]:.3f}")
+
+    times, xs, intensities = [], [], []
+
+    # 根据参数文件中的观测数量查找对应模型文件
+    for i in range(params.numObs):
+        # 尝试多种命名模式
+        phase_id = f"{int(i):03d}"
+        candidates = [
+            model_dir / f"phase{phase_id}.lsd",
+            model_dir / f"phase{phase_id}.spec",
+            model_dir / f"phase_{phase_id}.lsd",
+            model_dir / f"phase_{phase_id}.spec",
+        ]
+
+        file_found = None
+        for cand in candidates:
+            if cand.exists():
+                file_found = cand
+                break
+
+        if file_found is None:
+            print(
+                f"  Warning: model file not found for obs {i} (phase {phases[i]:.3f})"
+            )
+            continue
+
+        # 尝试使用 SpecIO，如果失败则直接读取
+        obs = None
+        if file_type != 'direct':
+            # 抑制SpecIO的错误输出
+            import io
+            import contextlib
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                obs = loadObsProfile(str(file_found), file_type=file_type)
+
+        if obs is None:
+            # 直接读取（跳过注释行，兼容4/6列格式）
+            try:
+                data = np.loadtxt(str(file_found), comments='#')
+                wl = data[:, 0]
+                specI = data[:, 1] if data.shape[1] > 1 else np.ones_like(wl)
+                specV = data[:, 2] if data.shape[1] > 2 else np.zeros_like(wl)
+                specQ = data[:, 3] if data.shape[1] > 3 else np.zeros_like(wl)
+                specU = data[:, 4] if data.shape[1] > 4 else np.zeros_like(wl)
+
+                # 提取对应 Stokes 分量
+                stokes_upper = stokes.upper()
+                if stokes_upper == 'I':
+                    spec = specI
+                elif stokes_upper == 'V':
+                    spec = specV
+                elif stokes_upper == 'Q':
+                    spec = specQ
+                elif stokes_upper == 'U':
+                    spec = specU
+                else:
+                    spec = specI
+
+                times.append(phases[i])
+                xs.append(wl)
+                intensities.append(spec)
+            except Exception as e:
+                print(f"  Warning: failed to load {file_found}: {e}")
+                continue
+        else:
+            # 使用 SpecIO 读取成功
+            stokes_upper = stokes.upper()
+            if stokes_upper == 'I':
+                spec = obs.specI
+            elif stokes_upper == 'V':
+                spec = obs.specV if obs.hasV else np.zeros_like(obs.specI)
+            elif stokes_upper == 'Q':
+                spec = obs.specQ if obs.hasQ else np.zeros_like(obs.specI)
+            elif stokes_upper == 'U':
+                spec = obs.specU if obs.hasU else np.zeros_like(obs.specI)
+            else:
+                spec = obs.specI
+
+            times.append(phases[i])
+            xs.append(obs.wl)
+            intensities.append(spec)
+
+    if len(times) == 0:
+        raise FileNotFoundError(f"No model spectra loaded from {model_dir}")
+
+    order = np.argsort(times)
+    return (np.array([times[i] for i in order]), [xs[i] for i in order],
+            [intensities[i] for i in order])
 
 
 def main():
-    args = parse_args()
-    spec_dir = Path(args.spec_dir)
-    param_file = args.param_file
-    file_type = args.file_type
+    parser = argparse.ArgumentParser(description='动态光谱可视化工具（使用项目标准接口）')
+    parser.add_argument('--params',
+                        type=str,
+                        required=True,
+                        help='参数文件路径（如 input/params_tomog.txt）')
+    parser.add_argument('--model-dir',
+                        type=str,
+                        default='output/outModel',
+                        help='模型光谱目录')
+    parser.add_argument('--stokes',
+                        type=str,
+                        default='I',
+                        choices=['I', 'V', 'Q', 'U'],
+                        help='Stokes 参数')
+    parser.add_argument('--file-type',
+                        type=str,
+                        default='auto',
+                        help='文件类型提示（auto/lsd_i/lsd_pol/spec_i等）')
+    parser.add_argument('--out', type=str, default=None, help='输出图像路径')
+    parser.add_argument('--cmap', type=str, default='RdBu_r', help='颜色映射')
+    parser.add_argument('--vmin', type=float, default=None, help='颜色范围下限')
+    parser.add_argument('--vmax', type=float, default=None, help='颜色范围上限')
+    parser.add_argument('--remove-baseline', action='store_true', help='去除基线')
+    args = parser.parse_args()
 
-    # 读取参数文件，获取JD、相位、文件名
-    par = readParamsTomog(param_file)
-    fnames = [Path(f) for f in par.fnames]
-    jds = np.array(par.jDates)
-    phases = np.array(par.phases)
-    # jd_ref/period 已在par.phases中用到，无需单独变量
+    print(f"Loading spectra from {args.model_dir}...")
+    print(f"Using params: {args.params}")
 
-    # 收集文件夹下所有光谱文件
-    all_files = sorted([
-        p for p in spec_dir.iterdir()
-        if p.is_file() and not p.name.startswith('.')
-    ])
-    # ==== 自动适配参数文件名与实际文件名 ==== #
-    import re
+    try:
+        times, xs, intensities = load_model_spectra(args.model_dir,
+                                                    args.params,
+                                                    stokes=args.stokes,
+                                                    file_type=args.file_type)
+        print(f"✓ Loaded {len(times)} spectra, Stokes {args.stokes}")
+    except Exception as e:
+        print(f"✗ Error loading spectra: {e}")
+        return 1
 
-    def normalize_name(name):
-        """提取文件名中的关键字母和数字，忽略路径、扩展名和分隔符"""
-        base = name.split('/')[-1]
-        base = base.split('.')[0]  # 去扩展名
-        # 提取字母和数字部分
-        letters = re.sub(r'[^a-zA-Z]', '', base).lower()
-        digits = re.sub(r'[^0-9]', '', base)
-        return letters, digits
+    # 创建动态谱对象
+    dynspec = IrregularDynamicSpectrum(times, xs, intensities)
 
-    def fuzzy_match(param_name, actual_names):
-        """模糊匹配参数文件名与实际文件名"""
-        p_letters, p_digits = normalize_name(param_name)
-        best_match = None
-        best_score = 0
+    if args.remove_baseline:
+        print("Removing baseline...")
+        dynspec.remove_baseline()
 
-        for actual in actual_names:
-            a_letters, a_digits = normalize_name(actual)
-            # 计算匹配分数：字母和数字分别匹配
-            score = 0
-            if p_letters in a_letters or a_letters in p_letters:
-                score += 1
-            if p_digits and a_digits:
-                # 数字匹配：去除前导零后比较
-                p_num = p_digits.lstrip('0') or '0'
-                a_num = a_digits.lstrip('0') or '0'
-                if p_num in a_num or a_num in p_num:
-                    score += 2  # 数字匹配权重更高
+    # 自动设置 vmin/vmax（针对吸收线）
+    vmin = args.vmin if args.vmin is not None else 0.95
+    vmax = args.vmax if args.vmax is not None else 1.02
 
-            if score > best_score:
-                best_score = score
-                best_match = actual
+    fig, ax = dynspec.plot(cmap=args.cmap, vmin=vmin, vmax=vmax)
+    ax.set_ylabel('Rotation Phase')
+    ax.set_xlabel('Velocity (km/s)' if xs[0][0] < 1000 else 'Wavelength (Å)')
+    ax.set_title(f'Dynamic Spectrum (Stokes {args.stokes})')
 
-        return best_match if best_score > 0 else None
-
-    file_map = {f.name: f for f in all_files}
-    actual_names = list(file_map.keys())
-    files_sorted = []
-
-    for f in fnames:
-        # 1. 精确匹配
-        if f.name in file_map:
-            files_sorted.append(file_map[f.name])
-        else:
-            # 2. 模糊匹配
-            matched = fuzzy_match(f.name, actual_names)
-            if matched:
-                files_sorted.append(file_map[matched])
-                print(f"模糊匹配: {f.name} -> {matched}")
-            else:
-                print(f"警告：未找到与 {f.name} 匹配的光谱文件。")
-
-    if not files_sorted:
-        print(f"未在{spec_dir}找到参数文件中指定的光谱文件。")
-        sys.exit(1)
-
-    # 获取JD和相位
-    times = jds
-    if args.sort_by_phase and (phases is not None):
-        times = phases
-
-    # 读取光谱
-    def time_parser(path, idx):
-        # 按文件名在参数文件中的顺序取JD/phase
-        name = Path(path).name
-        # 允许模糊匹配
-        norm = normalize_name(name)
-        for i, f in enumerate(fnames):
-            if name == f.name or normalize_name(f.name) == norm:
-                return times[i]
-        return idx
-
-    # 读取所有光谱，获取I/V分量
-    # 兼容 LSD I 或 LSD pol (I/V)
-    _, _, _, meta = load_lsd_spectra(files_sorted,
-                                     time_parser=time_parser,
-                                     file_type_hint=file_type,
-                                     return_metadata=True)
-    times_out, xs, intensities = load_lsd_spectra(files_sorted,
-                                                  time_parser=time_parser,
-                                                  file_type_hint=file_type)
-
-    # 判断是否有V分量
-    has_V = False
-    V_list = None
-    if 'extras' in meta and isinstance(meta['extras'], dict):
-        if 'Pol' in meta['extras'] and meta['extras']['Pol'] is not None:
-            V_list = meta['extras']['Pol']
-            # 需要确保 V_list 长度与 times_out 对齐
-            try:
-                has_V = len(V_list) == len(times_out)
-            except Exception:
-                has_V = False
-
-    # 绘图
-    if has_V:
-        fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-
-        # 计算时间步长
-        if len(times_out) > 1:
-            dt = np.diff(times_out)
-            dt = np.append(dt, dt[-1])  # 最后一个用前一个的
-        else:
-            dt = np.array([0.1])
-
-        # 计算 I 的全局范围，自动缩放；若跨越1.0，用TwoSlopeNorm以1为中心
-        I_all = np.concatenate([np.asarray(v) for v in intensities])
-        I_min, I_max = float(np.nanmin(I_all)), float(np.nanmax(I_all))
-        norm_I = None
-        vmin_I = I_min
-        vmax_I = I_max
-        if np.isfinite(I_min) and np.isfinite(I_max) and I_min < 1.0 < I_max:
-            norm_I = TwoSlopeNorm(vmin=I_min, vcenter=1.0, vmax=I_max)
-
-        # Stokes I
-        for i, (t, x, I_val) in enumerate(zip(times_out, xs, intensities)):
-            n = len(x)
-            # 构造网格边界
-            x_edges = np.linspace(x[0], x[-1], n + 1)
-            y_edges = [t - dt[i] / 2, t + dt[i] / 2]
-            X, Y = np.meshgrid(x_edges, y_edges)
-            Z = I_val[np.newaxis, :]
-            if norm_I is not None:
-                mesh_I = axes[0].pcolormesh(X,
-                                            Y,
-                                            Z,
-                                            cmap='viridis',
-                                            shading='flat',
-                                            norm=norm_I)
-            else:
-                mesh_I = axes[0].pcolormesh(X,
-                                            Y,
-                                            Z,
-                                            cmap='viridis',
-                                            shading='flat',
-                                            vmin=vmin_I,
-                                            vmax=vmax_I)
-
-        axes[0].set_xlabel('Velocity (km/s)')
-        axes[0].set_ylabel('Time/Phase')
-        axes[0].set_title('Stokes I Dynamic Spectrum')
-        axes[0].set_ylim(
-            min(times_out) - dt[0] / 2,
-            max(times_out) + dt[-1] / 2)
-        # 添加 I 的 colorbar
-        try:
-            plt.colorbar(mesh_I, ax=axes[0], label='Stokes I')
-        except Exception:
-            pass
-
-        # Stokes V
-        mesh = None
-        for i, (t, x, V_val) in enumerate(zip(times_out, xs, (V_list or []))):
-            n = len(x)
-            x_edges = np.linspace(x[0], x[-1], n + 1)
-            y_edges = [t - dt[i] / 2, t + dt[i] / 2]
-            X, Y = np.meshgrid(x_edges, y_edges)
-            Z = V_val[np.newaxis, :]
-            mesh = axes[1].pcolormesh(X,
-                                      Y,
-                                      Z,
-                                      cmap='RdBu_r',
-                                      shading='flat',
-                                      vmin=-0.03,
-                                      vmax=0.03)
-
-        axes[1].set_xlabel('Velocity (km/s)')
-        axes[1].set_ylabel('')
-        axes[1].set_title('Stokes V Dynamic Spectrum')
-        axes[1].set_ylim(
-            min(times_out) - dt[0] / 2,
-            max(times_out) + dt[-1] / 2)
-        axes[1].set_yticklabels([])
-
-        # 添加colorbar（仅当存在V绘制时）
-        if mesh is not None:
-            plt.colorbar(mesh, ax=axes[1], label='Stokes V')
-        plt.tight_layout()
-
-        if args.out:
-            fig.savefig(args.out, dpi=200)
-            print(f"已保存动态谱至 {args.out}")
-        else:
-            plt.show()
+    if args.out:
+        plt.savefig(args.out, dpi=150, bbox_inches='tight')
+        print(f"✓ Saved: {args.out}")
     else:
-        # 仅I分量
-        dynspec = IrregularDynamicSpectrum(times_out, xs, intensities)
-        fig, ax = dynspec.plot(title="Dynamic Spectrum",
-                               ylim=(min(times_out), max(times_out)))
-        if args.out:
-            fig.savefig(args.out, dpi=200)
-            print(f"已保存动态谱至 {args.out}")
-        else:
-            plt.show()
+        plt.show()
+
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())

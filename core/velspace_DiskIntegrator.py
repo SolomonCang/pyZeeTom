@@ -146,16 +146,17 @@ def disk_velocity_continuous_omega(r,
 class VelspaceDiskIntegrator:
     """
     在观测速度栅格上积分的盘模型，谱线来自外部 line_model:
-      - 外部 line_model: 需实现 BaseLineModel 接口的 compute_local_profile(wl_grid, Ic_weight, Blos, **kwargs)
+      - 外部 line_model: 必须提供，需实现 BaseLineModel 接口的 compute_local_profile(wl_grid, amp, Blos, **kwargs)
       - 本类负责:
           1) 生成像素未投影环向速度 v_phi；
           2) 乘以投影得到 v_los；
-          3) 将观测速度网格映射为每像素的“局部波长网格”；
+          3) 将观测速度网格映射为每像素的"局部波长网格"；
           4) 调用 line_model 取得局部 I/V/Q/U，再对像素求和；
           5) 做仪器卷积和连续谱归一。
     注意：
-      - 适配新的 linemodel：linemodel 内部用 strength 相对于 1 的偏离决定是吸收还是发射，
-        本积分器的 Ic_weight 仅体现连续强度权重（几何×响应），不再携带“发射/吸收”信息。
+      - line_model 参数为必需参数，需传入 core/local_linemodel_basic.py 中的模型实例（如 GaussianZeemanWeakLineModel）
+      - linemodel 内部用 amp（相对于 1 的偏离）决定是吸收还是发射
+      - 本积分器的 Ic_weight 仅体现连续强度权重（几何×响应），不再携带"发射/吸收"信息
     """
 
     def __init__(
@@ -163,8 +164,7 @@ class VelspaceDiskIntegrator:
             geom,
             wl0_nm,
             v_grid,
-            line_model=None,
-            local_sigma_kms=5.0,  # 若 line_model=None 时的默认高斯宽度
+            line_model,  # 必需参数，必须提供谱线模型
             line_area=1.0,
             response_func=None,
             response_map=None,
@@ -329,40 +329,61 @@ class VelspaceDiskIntegrator:
         else:
             Blos = np.zeros(self.grid.numPoints, dtype=float)
 
-        # 调用外部谱线模型
-        if line_model is None:
-            # 默认退化模型：速度空间高斯核（仅 I），用于快速测试通道
-            local_sigma_kms = float(local_sigma_kms)
-            dv = self.v[:, None] - v_los[None, :]
-            # 单位面积的归一高斯（仅为形状演示），与 Ic_weight 相乘
-            sigma = max(local_sigma_kms, 1e-30)
-            G = np.exp(-0.5 * (dv / sigma)**2) / (np.sqrt(2 * np.pi) * sigma
-                                                  )  # (Nv,Npix)
-            I_loc = Ic_weight[None, :] * G
-            V_loc = np.zeros_like(I_loc)
+        # 横向磁场和方位角（用于Q/U计算）
+        if hasattr(self.geom, "B_perp"):
+            Bperp = np.asarray(self.geom.B_perp)
+            assert Bperp.shape[0] == self.grid.numPoints
         else:
-            profiles = line_model.compute_local_profile(wl_cells,
-                                                        amp,
-                                                        Blos=Blos,
-                                                        Ic_weight=Ic_weight)
-            I_loc = profiles.get("I", None)
-            V_loc = profiles.get("V", None)
-            if I_loc is None:
-                raise ValueError("line_model 返回结果缺少键 'I'")
-            if V_loc is None:
-                V_loc = np.zeros_like(I_loc)
+            Bperp = None
+
+        if hasattr(self.geom, "chi"):
+            chi = np.asarray(self.geom.chi)
+            assert chi.shape[0] == self.grid.numPoints
+        else:
+            chi = None
+
+        # 调用外部谱线模型（必须提供）
+        if line_model is None:
+            raise ValueError(
+                "line_model 参数必须提供，请传入 BaseLineModel 实例（如 GaussianZeemanWeakLineModel）"
+            )
+
+        profiles = line_model.compute_local_profile(wl_cells,
+                                                    amp,
+                                                    Blos=Blos,
+                                                    Bperp=Bperp,
+                                                    chi=chi,
+                                                    Ic_weight=Ic_weight)
+        I_loc = profiles.get("I", None)
+        V_loc = profiles.get("V", None)
+        Q_loc = profiles.get("Q", None)
+        U_loc = profiles.get("U", None)
+        if I_loc is None:
+            raise ValueError("line_model 返回结果缺少键 'I'")
+        if V_loc is None:
+            V_loc = np.zeros_like(I_loc)
+        if Q_loc is None:
+            Q_loc = np.zeros_like(I_loc)
+        if U_loc is None:
+            U_loc = np.zeros_like(I_loc)
 
         # 对像素求和
         I_sum = np.sum(I_loc, axis=1)  # (Nv,)
         V_sum = np.sum(V_loc, axis=1)
+        Q_sum = np.sum(Q_loc, axis=1)
+        U_sum = np.sum(U_loc, axis=1)
 
         # 仪器卷积（按速度网格）
         if self.inst_fwhm > 0.0:
             I_conv = convolve_gaussian_1d(I_sum, self.dv, self.inst_fwhm)
             V_conv = convolve_gaussian_1d(V_sum, self.dv, self.inst_fwhm)
+            Q_conv = convolve_gaussian_1d(Q_sum, self.dv, self.inst_fwhm)
+            U_conv = convolve_gaussian_1d(U_sum, self.dv, self.inst_fwhm)
         else:
             I_conv = I_sum
             V_conv = V_sum
+            Q_conv = Q_sum
+            U_conv = U_sum
 
         # 连续谱基线：几何权重总和（与旧版保持一致）
         self.cont = np.sum(W)
@@ -374,12 +395,18 @@ class VelspaceDiskIntegrator:
                 # 归一化后基线应为 1.0，所以 I = (I_conv - cont) / cont + 1.0
                 self.I = (I_conv - self.cont) / self.cont + baseline
                 self.V = V_conv / self.cont
+                self.Q = Q_conv / self.cont
+                self.U = U_conv / self.cont
             else:
                 self.I = I_conv
                 self.V = V_conv
+                self.Q = Q_conv
+                self.U = U_conv
         else:
             self.I = I_conv
             self.V = V_conv
+            self.Q = Q_conv
+            self.U = U_conv
 
         # 便于诊断
         self.v_los = v_los

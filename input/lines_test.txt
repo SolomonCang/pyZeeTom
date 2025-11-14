@@ -1,3 +1,0 @@
-# Test line parameters
-# wl0(nm) sigWl(nm) g
-500.0  0.02  2.5
