@@ -87,8 +87,13 @@ class readParamsTomog:
                     self.lineEnableV = int(parts[2]) if len(parts) > 2 else 1
                     self.lineEnableQU = int(parts[3]) if len(parts) > 3 else 1
                 elif (i == 6):
-                    self.initMagFromFile = int(inLine.split()[0])
-                    self.initMagGeomFile = inLine.split()[1]
+                    # New unified model initialization: initTomogFile modelPath
+                    # initTomogFile: 0=disabled, 1=enabled (read model from .tomog file)
+                    # modelPath: path to .tomog file (e.g., output/geomodel_phase0.tomog)
+                    # When enabled, model parameters override input params and generate params_tomog_int.txt
+                    parts = inLine.split()
+                    self.initTomogFile = int(parts[0])
+                    self.initModelPath = parts[1] if len(parts) > 1 else None
                 elif (i == 7):
                     self.fitBri = int(inLine.split()[0])
                     self.chiScaleI = float(inLine.split()[1])
@@ -98,8 +103,9 @@ class readParamsTomog:
                     self.defaultBright = float(inLine.split()[1])
                     self.maximumBright = float(inLine.split()[2])
                 elif (i == 9):
-                    self.initBrightFromFile = int(inLine.split()[0])
-                    self.initBrightFile = inLine.split()[1]
+                    # Line 9 deprecated: initBrightFromFile was merged into initTomogFile
+                    # This line is now ignored; keep for backward compatibility
+                    pass
                 elif (i == 10):
                     self.estimateStrenght = int(inLine.split()[0])
                 elif (i == 11):
@@ -293,6 +299,166 @@ class readParamsTomog:
                     np.max(self.jDates) - np.min(self.jDates),
                     np.max(self.cycleList) - np.min(self.cycleList)))
 
+    def load_initial_model_from_tomog(self, verbose=1):
+        """
+        从 .tomog 文件加载初始模型参数（磁场、亮度等）
+        
+        如果 initTomogFile=1 且 initModelPath 有效，则：
+        1. 读取 .tomog 文件获取模型数据和元信息
+        2. 提取几何参数（inclination, pOmega, r0, period 等）
+        3. 如果 .tomog 中的参数与当前参数不同，生成 params_tomog_int.txt（内部参数文件）
+        4. 返回 (geom_loaded, meta_loaded, model_data)；否则返回 (None, None, None)
+        
+        Returns
+        -------
+        geom_loaded : SimpleNamespace or None
+            加载的几何对象（包含 grid、B_los、B_perp、chi 等）
+        meta_loaded : dict or None
+            .tomog 文件中的元信息
+        model_data : dict or None
+            原始模型数据表（r, phi, Blos, Bperp, chi, brightness 等）
+        """
+        if not hasattr(self, 'initTomogFile') or self.initTomogFile != 1:
+            if verbose:
+                print("[Model] initTomogFile disabled (or not set)")
+            return None, None, None
+
+        if not hasattr(self, 'initModelPath') or self.initModelPath is None:
+            if verbose:
+                print(
+                    "[Model] Warning: initTomogFile=1 but initModelPath not specified"
+                )
+            return None, None, None
+
+        from pathlib import Path
+        model_path = Path(self.initModelPath)
+        if not model_path.exists():
+            if verbose:
+                print(
+                    f"[Model] Error: initModelPath '{self.initModelPath}' does not exist"
+                )
+            return None, None, None
+
+        # 调用 VelspaceDiskIntegrator.read_geomodel 读取模型
+        try:
+            from core.velspace_DiskIntegrator import VelspaceDiskIntegrator
+            geom_loaded, meta_loaded, model_table = VelspaceDiskIntegrator.read_geomodel(
+                str(model_path))
+
+            if verbose:
+                print(
+                    f"[Model] Successfully loaded initial model from {self.initModelPath}"
+                )
+                print(
+                    f"[Model]   inclination_deg: {meta_loaded.get('inclination_deg', 'N/A')}"
+                )
+                print(f"[Model]   pOmega: {meta_loaded.get('pOmega', 'N/A')}")
+                print(f"[Model]   r0_rot: {meta_loaded.get('r0_rot', 'N/A')}")
+                print(f"[Model]   period: {meta_loaded.get('period', 'N/A')}")
+
+            # 检查是否需要生成 params_tomog_int.txt
+            self._check_and_generate_internal_params(geom_loaded, meta_loaded,
+                                                     verbose)
+
+            return geom_loaded, meta_loaded, model_table
+
+        except Exception as e:
+            if verbose:
+                print(
+                    f"[Model] Error loading model from {self.initModelPath}: {e}"
+                )
+            import traceback
+            traceback.print_exc()
+            return None, None, None
+
+    def _check_and_generate_internal_params(self, geom, meta, verbose=1):
+        """
+        检查 .tomog 模型中的参数是否与当前参数文件中的参数冲突。
+        如果存在冲突，生成 params_tomog_int.txt 文件，记录 .tomog 中的权威参数。
+        
+        Parameters
+        ----------
+        geom : SimpleNamespace
+            从 .tomog 读取的几何对象
+        meta : dict
+            从 .tomog 读取的元信息
+        verbose : int
+            输出详细度
+        """
+        from pathlib import Path
+        import datetime as dt
+
+        # 需要对比的参数字典（.tomog 中的键 → 当前 readParamsTomog 的属性）
+        param_mapping = {
+            "inclination_deg": ("inclination", lambda x: float(x)),
+            "pOmega": ("pOmega", lambda x: float(x)),
+            "r0_rot": ("radius", lambda x: float(x)),
+            "period": ("period", lambda x: float(x)),
+        }
+
+        conflicts = {}
+        for tomog_key, (attr_name, converter) in param_mapping.items():
+            if tomog_key not in meta:
+                continue
+
+            tomog_val = converter(meta[tomog_key])
+            current_val = getattr(self, attr_name, None)
+
+            if current_val is not None:
+                # 对比（允许小的数值误差）
+                if abs(tomog_val - current_val) > 1e-6:
+                    conflicts[attr_name] = {
+                        "input_file": current_val,
+                        "tomog_model": tomog_val
+                    }
+
+        if not conflicts:
+            if verbose:
+                print("[Model] No parameter conflicts detected.")
+            return
+
+        # 存在冲突，生成 params_tomog_int.txt
+        if verbose:
+            print("[Model] Parameter conflicts detected:")
+            for attr_name, vals in conflicts.items():
+                print(
+                    f"  {attr_name}: input={vals['input_file']}, tomog={vals['tomog_model']}"
+                )
+            print(
+                "[Model] Generating params_tomog_int.txt with .tomog parameters as authority..."
+            )
+
+        # 生成内部参数文件
+        int_params_path = Path("output") / "params_tomog_int.txt"
+        int_params_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(int_params_path, 'w') as f:
+            f.write(
+                "# params_tomog_int.txt - Internal parameters from loaded .tomog model\n"
+            )
+            f.write(f"# Generated from: {self.initModelPath}\n")
+            f.write(f"# Generated at: {dt.datetime.now().isoformat()}\n")
+            f.write(
+                "# This file records parameters from the .tomog model that differ from input/params_tomog.txt\n"
+            )
+            f.write(
+                "# These parameters should be used as the authority for subsequent analyses.\n"
+            )
+            f.write("#\n")
+
+            for attr_name, vals in conflicts.items():
+                f.write(f"# {attr_name}:\n")
+                f.write(f"#   input_file value: {vals['input_file']}\n")
+                f.write(f"#   tomog_model value: {vals['tomog_model']}\n")
+
+            f.write("#\n")
+            f.write("# Full .tomog metadata:\n")
+            for k in sorted(meta.keys()):
+                f.write(f"#   {k}: {meta[k]}\n")
+
+        if verbose:
+            print(f"[Model] Generated {int_params_path}")
+
     def setTarget(self):
         # Check whether to fit to a target chi^2 or to a target entropy
         if (self.targetForm == 'C'):
@@ -307,30 +473,6 @@ class readParamsTomog:
             print(
                 'ERROR unknown format for goodness of fit target: {:}'.format(
                     self.targetForm))
-            import sys
-            sys.exit()
-
-    def setCalcdIdV(self, verbose=1):
-        # Check which set of line profile to fit and which derivatives needs to be calculated
-        self.calcDI = 0
-        self.calcDV = 0
-        if (self.fitBri == 1):
-            self.calcDI = 1
-        elif ((self.fitBri > 1) | (self.fitBri < 0)):
-            print("ERROR: invalid value of fitBri: {:}".format(self.fitBri))
-        if (self.fitMag == 1):
-            self.calcDV = 1
-        elif ((self.fitMag > 1) | (self.fitMag < 0)):
-            print("ERROR: invalid value of fitMag: {:}".format(self.fitMag))
-        if ((self.calcDI == 0) & (self.calcDV == 0)):
-            if (verbose == 1):
-                print("Warning: no parameters to fit!")
-            self.numIterations = 0
-            # import sys  # legacy early exit suppressed for tomography workflow
-
-        if ((self.fEntropyBright != 1) & (self.fEntropyBright != 2)):
-            print('error unrecognized brightness entropy flag: {:}'.format(
-                self.fEntropyBright))
             import sys
             sys.exit()
 
@@ -634,6 +776,167 @@ def save_geomodel_tomog(grid,
             f.write(
                 f"{r:10.6f}  {phi:10.6f}  {blos:10.3f}  {bperp:10.3f}  {chi:10.6f}  {bright:10.6f}\n"
             )
+
+
+def save_model_spectra_to_outModelSpec(par,
+                                       results,
+                                       obsSet,
+                                       output_dir="output/outModelSpec",
+                                       verbose=1):
+    """
+    将模型光谱保存到 output/outModelSpec 目录，按观测文件格式组织。
+
+    根据观测文件的格式（spec/lsd）、波长范围、速度范围和偏振通道信息，
+    为每个观测生成对应格式的模型光谱文件。
+
+    Parameters
+    ----------
+    par : readParamsTomog
+        参数对象，包含 fnames, jDates, velRs, polChannels, phases 等
+    results : list of tuples
+        每个元组为 (v_grid, specI, specV, specQ, specU, pol_channel)
+        或 (v_grid, specI, specV, specQ, specU)
+    obsSet : list of ObservationProfile
+        观测数据对象列表，用于获取格式、波长范围等信息
+    output_dir : str
+        输出目录（默认：output/outModelSpec）
+    verbose : int
+        详细程度
+
+    Returns
+    -------
+    list of str
+        生成的文件路径列表
+    """
+    from pathlib import Path
+    import core.SpecIO as SpecIO
+
+    outdir = Path(output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    output_files = []
+
+    if verbose:
+        print(
+            f"\n[save_model_spectra_to_outModelSpec] 保存 {len(results)} 个模型光谱..."
+        )
+
+    for i, result in enumerate(results):
+        if i >= len(obsSet):
+            if verbose:
+                print(
+                    f"  警告：result 数量({len(results)}) > obsSet 数量({len(obsSet)})"
+                )
+            break
+
+        # 获取观测信息
+        obs = obsSet[i]
+
+        # 提取观测参数
+        hjd = par.jDates[i] if i < len(par.jDates) else 0.0
+        vel_r = par.velRs[i] if i < len(par.velRs) else 0.0
+        pol_channel = str(par.polChannels[i]).upper() if i < len(
+            par.polChannels) else 'V'
+        phase = par.phases[i] if hasattr(par, 'phases') and i < len(
+            par.phases) else (i / len(results) if len(results) > 0 else 0.0)
+
+        # 解包结果
+        if len(result) >= 6:
+            v_grid, specI, specV, specQ, specU, pol_ch_from_result = result[:6]
+            # 使用结果中的 pol_channel（如果有的话）
+            if pol_ch_from_result is not None:
+                pol_channel = str(pol_ch_from_result).upper()
+        elif len(result) >= 5:
+            v_grid, specI, specV, specQ, specU = result[:5]
+        elif len(result) >= 3:
+            v_grid, specI, specV = result[:3]
+            specQ = np.zeros_like(specI)
+            specU = np.zeros_like(specI)
+        else:
+            if verbose:
+                print(f"  警告：结果 {i} 格式不正确，跳过")
+            continue
+
+        # 确定输出格式（从观测对象推断）
+        obs_format = obs.profile_type.lower() if hasattr(
+            obs, 'profile_type') else 'spec'
+        if obs_format == 'velocity' or obs_format == 'lsd':
+            fmt = 'lsd'
+            ext = '.lsd'
+        else:
+            fmt = 'spec'
+            ext = '.spec'
+
+        # 根据 pol_channel 确定 file_type_hint
+        if pol_channel == 'I':
+            file_type_hint = 'lsd_i' if fmt == 'lsd' else 'spec_i'
+        else:
+            file_type_hint = 'lsd_pol' if fmt == 'lsd' else 'spec_pol'
+
+        # 构建输出文件名
+        # 格式：phase_XXXX_HJDpYYY_VRsZZZ_CH.ext
+        # 例如：phase_0000_HJDp0p200_VRs0p00_V.lsd
+        hjd_str = f"{hjd:.3f}".replace('.', 'p')
+        vel_r_sign = 'p' if vel_r >= 0 else 'm'
+        vel_r_abs = abs(vel_r)
+        vel_r_str = f"{vel_r_sign}{vel_r_abs:.2f}".replace('.', 'p')
+
+        outfile_name = f"phase_{i:04d}_HJD{hjd_str}_VR{vel_r_str}_{pol_channel}{ext}"
+        outfile = outdir / outfile_name
+
+        # 根据 pol_channel 选择要保存的偏振分量
+        if pol_channel == 'Q':
+            pol_data = specQ
+        elif pol_channel == 'U':
+            pol_data = specU
+        else:  # 'V' 或 'I'
+            pol_data = specV if pol_channel == 'V' else np.zeros_like(specI)
+
+        # 使用 SpecIO 保存模型光谱
+        try:
+            header = {
+                "phase_index": str(i),
+                "HJD": f"{hjd:.6f}",
+                "velR": f"{vel_r:.2f}",
+                "pol_channel": str(pol_channel),
+                "phase": f"{phase:.4f}",
+            }
+
+            # 调用 SpecIO.write_model_spectrum，确保格式一致
+            SpecIO.write_model_spectrum(str(outfile),
+                                        v_grid,
+                                        specI,
+                                        V=specV,
+                                        Q=specQ,
+                                        U=specU,
+                                        fmt=fmt,
+                                        header=header,
+                                        pol_channel=pol_channel,
+                                        file_type_hint=file_type_hint)
+
+            output_files.append(str(outfile))
+
+            if verbose > 1:
+                print(
+                    f"  [{i:2d}] HJD={hjd:.3f}, phase={phase:.4f}, VR={vel_r:+.2f}, "
+                    f"CH={pol_channel}: {outfile.name}")
+
+        except Exception as e:
+            if verbose:
+                print(f"  警告：保存文件 {outfile.name} 失败：{e}")
+
+    if verbose:
+        print(
+            f"[save_model_spectra_to_outModelSpec] 完成！生成 {len(output_files)} 个文件到 {outdir}"
+        )
+        print("  文件格式：phase_XXXX_HJDYYY_VRZZ_CH.ext")
+        print("    XXXX = 观测索引（0000-9999）")
+        print("    YYY = Heliocentric Julian Date (p=小数点)")
+        print("    ZZ = 径向速度修正（km/s）")
+        print("    CH = 偏振通道（I/V/Q/U）")
+        print("    ext = 格式后缀（.spec 或 .lsd）")
+
+    return output_files
 
 
 #############################################

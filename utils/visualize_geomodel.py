@@ -53,7 +53,11 @@ def plot_geomodel(geom,
     Blos = table.get('Blos', np.zeros_like(r))
     Bperp = table.get('Bperp', np.zeros_like(r))
 
-    if 'brightness' in table:
+    # 从.tomog文件中读取亮度（amplitude）数据
+    # 优先级：A（spot amplitude）> brightness > Ic_weight > 默认1.0
+    if 'A' in table:
+        brightness = table['A']
+    elif 'brightness' in table:
         brightness = table['brightness']
     elif 'Ic_weight' in table:
         brightness = table['Ic_weight']
@@ -64,7 +68,20 @@ def plot_geomodel(geom,
 
     # 创建色标
     bright_cmap = create_brightness_colormap()
-    bright_norm = TwoSlopeNorm(vmin=0.8, vcenter=1.0, vmax=1.2)
+
+    # 动态设置亮度范围
+    bright_min = np.min(brightness)
+    bright_max = np.max(brightness)
+    # 如果数据全为1.0（无spot影响），使用默认范围
+    if np.allclose(bright_min, bright_max):
+        bright_norm = TwoSlopeNorm(vmin=0.8, vcenter=1.0, vmax=1.2)
+    else:
+        # 否则根据实际数据范围设置
+        # vcenter设为1.0（无spot影响的基线值）
+        # 如果范围很宽，自动调整
+        vmin = min(bright_min, 1.0 - (bright_max - 1.0))
+        vmax = max(bright_max, 1.0 + (1.0 - bright_min))
+        bright_norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
 
     fig = plt.figure(figsize=(18, 5))
 
@@ -326,10 +343,11 @@ def plot_geomodel(geom,
 def main():
     parser = argparse.ArgumentParser(
         description="Visualize tomography geometric model")
-    parser.add_argument('--model',
-                        type=str,
-                        default='test_output/geomodel_phase_00.tomog',
-                        help='Model file path')
+    parser.add_argument(
+        '--model',
+        type=str,
+        default='output/simulation/spot_model_phase_0.00.tomog',
+        help='Model file path')
     parser.add_argument('--out',
                         type=str,
                         default=None,
