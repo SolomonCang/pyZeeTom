@@ -29,10 +29,18 @@ C  1.0  0
 1e-3
 
 #5 lineAmpConst  k_QU  enableV  enableQU
--0.5  1.0  1  0
+1  1.0  1  1
 
-#6 initMagFromFile  initMagGeomFile (legacy flag + filename)
-0  none
+#6 initTomogFile  initModelPath
+# Unified model initialization parameter (new format, replaces legacy #6 and #9)
+# initTomogFile: 0=disabled, 1=enabled (read model from .tomog file)
+# initModelPath: path to .tomog model file (e.g., output/geomodel_phase0.tomog)
+# When enabled:
+#   - Model parameters override input params (inclination, pOmega, period, etc.)
+#   - If parameter conflicts exist, params_tomog_int.txt is generated in output/
+#   - Magnetic field (B_los, B_perp, chi) and brightness from .tomog are loaded
+# Note: Legacy initMagFromFile/initBrightFromFile (old #6/#9 lines) are deprecated
+1  output/spot_forward/spot_model_phase_0p00.tomog
 
 #7 fitBri  chiScaleI  brightEntScale
 0  1.0  1.0
@@ -40,8 +48,11 @@ C  1.0  0
 #8 fEntropyBright  defaultBright  maximumBright
 1  1.0  2.0
 
-#9 initBrightFromFile  initBrightFile
-0  none
+#9 (deprecated - line ignored for backward compatibility)
+# Legacy: was initBrightFromFile initBrightFile
+# Now merged into #6 initTomogFile
+# Kept here as placeholder to maintain line numbering
+0
 
 #10 estimateStrenght (legacy line strength fitting flag)
 0
@@ -49,7 +60,7 @@ C  1.0  0
 #11 spectralResolution  lineParamFile
 # spectralResolution: spectrograph resolution (e.g., 65000), will compute FWHM = c/R (km/s)
 # lineParamFile: path to line parameters file (format: wl0 sigWl g)
-65000  lines.txt
+65000  input/lines.txt
 
 #12 velStart  velEnd  obsFileType  specType
 # obsFileType: observation file format hint (lsd_i, lsd_pol, spec_i, spec_pol, auto)
@@ -60,13 +71,13 @@ C  1.0  0
 #13 jDateRef  (HJD0, reference epoch for phase calculation: phase = (HJD - HJD0) / period)
 0.5
 
-#14+ observation entries: filename  JD  velR  [polchannel]
+#14+ observation entries: filename  HJD  velR  [polchannel]
 # polchannel: I/V/Q/U (optional, default=V)
 #   I: Intensity only (output spec_i or lsd_i format, 3 columns)
 #   V/Q/U: Polarization (output spec_pol or lsd_pol format with specified Stokes component)
 # Example for 5 phases over 1 rotation period (0-1 day):
 input/inSpec/obs_phase_00.spec  0.20  0.0  I
-input/inSpec/obs_phase_00.spec  0.40  0.0  V
-input/inSpec/obs_phase_00.spec  0.60  0.0  Q
-input/inSpec/obs_phase_00.spec  0.80  0.0  U
-input/inSpec/obs_phase_00.spec  1.00  0.0  V
+input/inSpec/obs_phase_01.spec  0.40  0.0  V
+input/inSpec/obs_phase_02.spec  0.60  0.0  Q
+input/inSpec/obs_phase_03.spec  0.80  0.0  U
+input/inSpec/obs_phase_04.spec  1.00  0.0  V

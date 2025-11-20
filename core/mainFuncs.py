@@ -1,4 +1,7 @@
 import numpy as np
+from pathlib import Path
+import core.SpecIO as SpecIO
+import datetime as dt
 
 c = 2.99792458e5
 
@@ -35,7 +38,7 @@ class readParamsTomog:
 
     def __init__(self, inParamsName, verbose=1):
         # Read in the model and control parameters
-        fInZDI = open(inParamsName, 'r')
+        fInTomog = open(inParamsName, 'r')
         self.fnames = np.array([])
         self.jDates = np.array([])
         self.velRs = np.array([])
@@ -46,7 +49,7 @@ class readParamsTomog:
         self.obsFileType = 'auto'  # observation format hint for readObs
         self.enable_stellar_occultation = 0  # 默认关闭恒星遮挡
         i = 0
-        for inLine in fInZDI:
+        for inLine in fInTomog:
             if (inLine.strip() == ''):  # skip blank lines
                 continue
             # check for comments (ignoring white-space)
@@ -330,7 +333,6 @@ class readParamsTomog:
                 )
             return None, None, None
 
-        from pathlib import Path
         model_path = Path(self.initModelPath)
         if not model_path.exists():
             if verbose:
@@ -341,7 +343,7 @@ class readParamsTomog:
 
         # 调用 VelspaceDiskIntegrator.read_geomodel 读取模型
         try:
-            from core.velspace_DiskIntegrator import VelspaceDiskIntegrator
+            from core.disk_geometry_integrator import VelspaceDiskIntegrator
             geom_loaded, meta_loaded, model_table = VelspaceDiskIntegrator.read_geomodel(
                 str(model_path))
 
@@ -385,8 +387,6 @@ class readParamsTomog:
         verbose : int
             输出详细度
         """
-        from pathlib import Path
-        import datetime as dt
 
         # 需要对比的参数字典（.tomog 中的键 → 当前 readParamsTomog 的属性）
         param_mapping = {
@@ -475,6 +475,199 @@ class readParamsTomog:
                     self.targetForm))
             import sys
             sys.exit()
+
+    def write_params_file(self, outfile, verbose=1):
+        """
+        根据已有的参数信息写入新的参数文件。
+        
+        Parameters
+        ----------
+        outfile : str
+            输出文件路径（如 output/params_tomog_new.txt）
+        verbose : int
+            输出详细度（0=无输出，1=基本信息，2=详细信息）
+            
+        Returns
+        -------
+        bool
+            写入成功返回 True，否则返回 False
+            
+        Notes
+        -----
+        写入的格式与原参数文件格式完全相同，包含所有14+行的参数和观测数据。
+        此方法用于：
+        1. 修改后保存参数（如修改了 inclination, vsini 等）
+        2. 从其他来源（如 .tomog 文件）加载参数后，生成新的标准参数文件
+        3. 参数验证和文档化（输出参数文件便于审核）
+        """
+
+        outpath = Path(outfile)
+        outpath.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(outfile, 'w') as f:
+                # 文件头注释
+                f.write("# pyZeeTom parameter file (auto-generated)\n")
+                f.write(f"# Generated: {dt.datetime.now().isoformat()}\n")
+                f.write(
+                    "# Lines are positional. Blank lines and lines starting with # are ignored.\n"
+                )
+                f.write(
+                    "# Units: angles in degrees, velocities km/s, dates in HJD (Heliocentric Julian Date).\n"
+                )
+                f.write("\n")
+
+                # 行0: inclination vsini period pOmega
+                f.write("#0 inclination  vsini  period  pOmega\n")
+                f.write(
+                    "# period: rotation period at reference radius r0 (in days)\n"
+                )
+                f.write(
+                    "# pOmega: power-law index for differential rotation, Ω(r) = Ω_ref × (r/r0)^pOmega\n"
+                )
+                f.write(
+                    f"{self.inclination:.1f}  {self.vsini:.1f}  {self.period:.4f}  {self.pOmega:.3f}\n"
+                )
+                f.write("\n")
+
+                # 行1: mass radius [Vmax] [r_out] [enable_occultation]
+                f.write(
+                    "#1 mass  radius  [Vmax]  [r_out]  [enable_occultation]\n")
+                f.write(
+                    "# radius: stellar radius (R_sun), also used as reference radius r0\n"
+                )
+                f.write(
+                    "# r_out: outer disk radius (in units of stellar radius)\n"
+                )
+                f.write("# enable_occultation: 0=off, 1=on\n")
+                enable_occ = getattr(self, 'enable_stellar_occultation', 0)
+                f.write(
+                    f"{self.mass:.2f}  {self.radius:.2f}  {self.Vmax:.4f}  {self.r_out:.2f}  {enable_occ}\n"
+                )
+                f.write("\n")
+
+                # 行2: nRingsStellarGrid
+                f.write("#2 nRingsStellarGrid\n")
+                f.write(f"{self.nRingsStellarGrid}\n")
+                f.write("\n")
+
+                # 行3: targetForm targetValue numIterations
+                f.write(
+                    "#3 targetForm  targetValue  numIterations   (C=chi^2 target, E=entropy target)\n"
+                )
+                f.write(
+                    f"{self.targetForm}  {self.targetValue:.4f}  {self.numIterations}\n"
+                )
+                f.write("\n")
+
+                # 行4: test_aim
+                f.write(
+                    "#4 test_aim (convergence threshold for Test statistic)\n")
+                f.write(f"{self.test_aim:.2e}\n")
+                f.write("\n")
+
+                # 行5: lineAmpConst k_QU enableV enableQU
+                f.write("#5 lineAmpConst  k_QU  enableV  enableQU\n")
+                f.write(
+                    f"{self.lineAmpConst:.1f}  {self.lineKQU:.1f}  {self.lineEnableV}  {self.lineEnableQU}\n"
+                )
+                f.write("\n")
+
+                # 行6: initTomogFile initModelPath
+                f.write("#6 initTomogFile  initModelPath\n")
+                init_tomog = getattr(self, 'initTomogFile', 0)
+                init_path = getattr(self, 'initModelPath', '')
+                f.write(f"{init_tomog}  {init_path}\n")
+                f.write("\n")
+
+                # 行7: fitBri chiScaleI brightEntScale
+                f.write("#7 fitBri  chiScaleI  brightEntScale\n")
+                f.write(
+                    f"{self.fitBri}  {self.chiScaleI:.1f}  {self.brightEntScale:.1f}\n"
+                )
+                f.write("\n")
+
+                # 行8: fEntropyBright defaultBright maximumBright
+                f.write("#8 fEntropyBright  defaultBright  maximumBright\n")
+                f.write(
+                    f"{self.fEntropyBright}  {self.defaultBright:.1f}  {self.maximumBright:.1f}\n"
+                )
+                f.write("\n")
+
+                # 行9: 已弃用（占位符）
+                f.write(
+                    "#9 (deprecated - line ignored for backward compatibility)\n"
+                )
+                f.write("0\n")
+                f.write("\n")
+
+                # 行10: estimateStrenght
+                f.write(
+                    "#10 estimateStrenght (legacy line strength fitting flag)\n"
+                )
+                f.write(f"{self.estimateStrenght}\n")
+                f.write("\n")
+
+                # 行11: spectralResolution lineParamFile
+                f.write("#11 spectralResolution  lineParamFile\n")
+                f.write(
+                    f"{self.spectralResolution:.0f}  {self.lineParamFile}\n")
+                f.write("\n")
+
+                # 行12: velStart velEnd obsFileType specType
+                f.write("#12 velStart  velEnd  obsFileType  specType\n")
+                spec_type_str = getattr(self, 'specType', 'auto')
+                f.write(
+                    f"{self.velStart:.1f}  {self.velEnd:.1f}  {self.obsFileType}  specType={spec_type_str}\n"
+                )
+                f.write("\n")
+
+                # 行13: jDateRef
+                f.write(
+                    "#13 jDateRef  (HJD0, reference epoch for phase calculation)\n"
+                )
+                f.write(f"{self.jDateRef:.4f}\n")
+                f.write("\n")
+
+                # 行14+: 观测数据
+                f.write(
+                    "#14+ observation entries: filename  HJD  velR  [polchannel]\n"
+                )
+                f.write("# polchannel: I/V/Q/U (optional, default=V)\n")
+                for i in range(self.numObs):
+                    fname = self.fnames[i]
+                    hjd = self.jDates[i]
+                    velr = self.velRs[i]
+                    polch = self.polChannels[i] if i < len(
+                        self.polChannels) else 'V'
+                    f.write(f"{fname}  {hjd:.2f}  {velr:.2f}  {polch}\n")
+
+                if verbose >= 1:
+                    print(
+                        f"[writeParamsFile] Successfully wrote parameters to {outfile}"
+                    )
+                    if verbose >= 2:
+                        print(f"  - {self.numObs} observation entries")
+                        print(
+                            f"  - Grid: inclination={self.inclination:.1f}°, vsini={self.vsini:.1f} km/s"
+                        )
+                        print(
+                            f"  - Grid velocity range: Vmax={self.Vmax:.1f} km/s"
+                        )
+                        print(
+                            f"  - Line parameters from: {self.lineParamFile}")
+                        print(
+                            f"  - Spectral resolution: {self.spectralResolution:.0f}"
+                        )
+
+                return True
+
+        except Exception as e:
+            if verbose >= 1:
+                print(f"[writeParamsFile] Error writing to {outfile}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 
 #############################################
@@ -578,7 +771,6 @@ def save_iteration_summary(outfile,
     mode : str
         'append' 或 'overwrite'
     """
-    from pathlib import Path
 
     outpath = Path(outfile)
     outpath.parent.mkdir(parents=True, exist_ok=True)
@@ -635,8 +827,6 @@ def save_model_spectra(results,
     prefix : str
         文件名前缀
     """
-    from pathlib import Path
-    import core.SpecIO as SpecIO
 
     outdir = Path(output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -677,107 +867,6 @@ def save_model_spectra(results,
                                     pol_channel=pol_channel)
 
 
-def save_geomodel_tomog(grid,
-                        mag_field=None,
-                        brightness=None,
-                        output_file="output/outGeoModel.tomog",
-                        meta=None,
-                        geom=None,
-                        integrator=None):
-    """
-    保存tomography几何模型到.tomog文件
-    
-    优先使用 VelspaceDiskIntegrator.write_geomodel() 方法以保存完整信息。
-    如果未提供 integrator，则使用简化格式。
-    
-    Parameters
-    ----------
-    grid : diskGrid
-        盘网格对象
-    mag_field : MagneticFieldParams, optional
-        磁场参数
-    brightness : np.ndarray, optional
-        亮度分布
-    output_file : str
-        输出文件路径
-    meta : dict, optional
-        元信息（目标名、周期等）
-    geom : SimpleDiskGeometry, optional
-        几何对象，用于构造完整的 integrator
-    integrator : VelspaceDiskIntegrator, optional
-        积分器对象，包含完整的物理信息
-    """
-    from pathlib import Path
-
-    outpath = Path(output_file)
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-
-    # 如果提供了 integrator，使用其 write_geomodel 方法
-    if integrator is not None:
-        # 更新 integrator.geom 中的磁场参数
-        if mag_field is not None:
-            integrator.geom.B_los = mag_field.Blos
-            integrator.geom.B_perp = mag_field.Bperp
-            integrator.geom.chi = mag_field.chi
-        integrator.write_geomodel(output_file, meta=meta)
-        return
-
-    # 否则使用简化格式（向后兼容）
-    with open(output_file, 'w') as f:
-        # 写入表头
-        f.write("# pyZeeTom Tomography Model (simplified format)\n")
-        f.write(
-            "# Format: r(R*)  phi(rad)  Blos(G)  Bperp(G)  chi(rad)  brightness\n"
-        )
-
-        # 写入元信息
-        if meta is not None:
-            f.write("#\n# Metadata:\n")
-            for key, val in meta.items():
-                f.write(f"#   {key}: {val}\n")
-
-        # 如果有 geom，写入几何参数
-        if geom is not None:
-            f.write("#\n# Geometry:\n")
-            if hasattr(geom, 'inclination_rad'):
-                f.write(
-                    f"#   inclination_deg: {np.rad2deg(geom.inclination_rad):.2f}\n"
-                )
-            if hasattr(geom, 'phi0'):
-                f.write(f"#   phi0: {geom.phi0:.6f}\n")
-            if hasattr(geom, 'pOmega'):
-                f.write(f"#   pOmega: {geom.pOmega:.6f}\n")
-            if hasattr(geom, 'r0'):
-                f.write(f"#   r0: {geom.r0:.6f}\n")
-            if hasattr(geom, 'period'):
-                f.write(f"#   period: {geom.period:.6f}\n")
-
-        # 写入网格信息
-        f.write("#\n# Grid:\n")
-        f.write(f"#   nr: {grid.nr}\n")
-        f.write(f"#   npix: {len(grid.r)}\n")
-        if hasattr(grid, 'r_in'):
-            f.write(f"#   r_in: {grid.r_in:.6f}\n")
-        if hasattr(grid, 'r_out'):
-            f.write(f"#   r_out: {grid.r_out:.6f}\n")
-
-        f.write("#" + "-" * 78 + "\n")
-
-        # 写入数据
-        npix = len(grid.r)
-        for i in range(npix):
-            r = grid.r[i]
-            phi = grid.phi[i]
-            blos = mag_field.Blos[i] if mag_field is not None else 0.0
-            bperp = mag_field.Bperp[i] if mag_field is not None else 0.0
-            chi = mag_field.chi[i] if mag_field is not None else 0.0
-            bright = brightness[i] if brightness is not None else 1.0
-
-            f.write(
-                f"{r:10.6f}  {phi:10.6f}  {blos:10.3f}  {bperp:10.3f}  {chi:10.6f}  {bright:10.6f}\n"
-            )
-
-
 def save_model_spectra_to_outModelSpec(par,
                                        results,
                                        obsSet,
@@ -808,8 +897,6 @@ def save_model_spectra_to_outModelSpec(par,
     list of str
         生成的文件路径列表
     """
-    from pathlib import Path
-    import core.SpecIO as SpecIO
 
     outdir = Path(output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -883,14 +970,6 @@ def save_model_spectra_to_outModelSpec(par,
 
         outfile_name = f"phase_{i:04d}_HJD{hjd_str}_VR{vel_r_str}_{pol_channel}{ext}"
         outfile = outdir / outfile_name
-
-        # 根据 pol_channel 选择要保存的偏振分量
-        if pol_channel == 'Q':
-            pol_data = specQ
-        elif pol_channel == 'U':
-            pol_data = specU
-        else:  # 'V' 或 'I'
-            pol_data = specV if pol_channel == 'V' else np.zeros_like(specI)
 
         # 使用 SpecIO 保存模型光谱
         try:

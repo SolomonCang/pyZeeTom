@@ -1,187 +1,308 @@
-import os
+# generate_emission_spots_sim.py (精简版)
+# Spot模拟配置与.tomog生成工具
+# 功能：
+#   1. 从参数或代码配置多个spot
+#   2. 使用SpotSimulator创建几何模型
+#   3. 输出.tomog文件供pyzeetom/tomography.py加载
+#   4. 注意：谱线合成由 pyzeetom/tomography.py 的0-iter正演处理
+#           通过修改 input/params_tomog.txt 的 initTomogFile 和 initModelPath 接入
+
 import numpy as np
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+import json
+
+# 导入核心模块
 from core.grid_tom import diskGrid
-from core.local_linemodel_basic import LineData, GaussianZeemanWeakLineModel
-from core.spot_geometry import Spot, SpotCollection, TimeEvolvingSpotGeometry
-from core.mainFuncs import readParamsTomog
+from utils.spot_simulator import SpotSimulator, SpotConfig
 
-# 参数
-output_dir = 'input/inSpec'
-os.makedirs(output_dir, exist_ok=True)
 
-# 物理参数
-n_spots = 10
-r_min, r_max = 1.0, 3.0
-phi_initial = 0.0
-amp = 2.0  # 发射
-spot_radius = 0.25
-B_amp = 1000  # Gauss
-inclination = 60.0
-nr = 60
-period = 1.0
-pOmega = 0.0
-vsini = 100.0
-radius = 1.0
-r_out = 3.0
-SNR = 1000
-n_phases = 5
-phase_start, phase_end = 0.0, 1.5
-phases = np.linspace(phase_start, phase_end, n_phases)
-wavelength_domain = True  # 生成波长域(spec_pol)而非速度域(lsd_pol)数据
+class SpotSimulationConfig:
+    """
+    Spot模拟配置管理：
+      1. 配置grid参数
+      2. 配置spot列表
+      3. 生成.tomog模型
+    """
 
-# 谱线参数
+    def __init__(self, output_dir: str = "./output", verbose: int = 1):
+        """
+        初始化配置
 
-# 自动选择有效谱线参数文件，保证 wl0 有效
-line_data = None
-for fname in ['input/lines.txt', 'input/lines_test.txt']:
-    try:
-        ld = LineData(fname)
-        if ld.wl0 is not None:
-            line_data = ld
-            break
-    except Exception:
-        continue
-if line_data is None:
-    raise RuntimeError('未找到有效的谱线参数文件')
-# 启用QU以便可选择输出Q/U
-linemodel = GaussianZeemanWeakLineModel(line_data,
-                                        k_QU=1.0,
-                                        enable_V=True,
-                                        enable_QU=True)
+        参数:
+        -------
+        output_dir : str
+            输出目录（存放.tomog文件）
+        verbose : int
+            输出详细程度
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.verbose = int(verbose)
+        self.simulator = None
+        self.spot_configs: List[SpotConfig] = []
+        
+        # 几何参数
+        self.grid_params = {}
+        self.geom_params = {}
 
-# 网格
-grid = diskGrid(nr=nr, r_in=0.0, r_out=r_out, verbose=0)
+    def setup_grid(self,
+                   nr: int = 40,
+                   r_in: float = 0.5,
+                   r_out: float = 4.0,
+                   inclination_deg: float = 60.0,
+                   pOmega: float = -0.5,
+                   r0_rot: float = 1.0,
+                   period_days: float = 1.0) -> SpotSimulator:
+        """
+        设置grid和几何参数
 
-# 创建spot
-rs = np.linspace(r_min, r_max, n_spots)
-spots = [
-    Spot(r=r,
-         phi_initial=phi_initial,
-         amplitude=amp,
-         spot_type='emission',
-         radius=spot_radius,
-         B_amplitude=B_amp,
-         B_direction='radial') for r in rs
-]
-spot_collection = SpotCollection(spots=spots,
-                                 pOmega=pOmega,
-                                 r0=radius,
-                                 period=period)
-spot_geometry = TimeEvolvingSpotGeometry(grid, spot_collection)
+        返回:
+        -------
+        SpotSimulator
+            初始化的simulator
+        """
+        # 保存参数
+        self.grid_params = {
+            'nr': nr,
+            'r_in': r_in,
+            'r_out': r_out,
+        }
+        self.geom_params = {
+            'inclination_deg': inclination_deg,
+            'pOmega': pOmega,
+            'r0_rot': r0_rot,
+            'period_days': period_days,
+        }
+        
+        # 创建grid
+        grid = diskGrid(nr=nr, r_in=r_in, r_out=r_out, verbose=self.verbose)
+        
+        # 创建simulator
+        self.simulator = SpotSimulator(
+            grid,
+            inclination_rad=np.deg2rad(inclination_deg),
+            phi0=0.0,
+            pOmega=pOmega,
+            r0_rot=r0_rot,
+            period_days=period_days)
 
-# 物理常数
-c = 2.99792458e5  # km/s
-# 确保 wl0 有效并为 float
-if line_data.wl0 is None:
-    raise ValueError("LineData.wl0 为空，无法构造波长网格")
-wl0 = float(line_data.wl0)
+        if self.verbose:
+            print(f"[SpotConfig] Grid setup: nr={nr}, r=[{r_in},{r_out}]")
+            print(f"[SpotConfig] Geometry: i={inclination_deg}°, pOmega={pOmega}, "
+                  f"r0={r0_rot}R*, P={period_days}d")
+        
+        return self.simulator
 
-# 读取 specType 参数以决定输出格式
-try:
-    par = readParamsTomog('input/params_tomog.txt', verbose=0)
-    spec_type = getattr(par, 'specType', 'auto')
-    if spec_type.lower() == 'spec':
-        wavelength_domain = True
-    elif spec_type.lower() == 'lsd':
-        wavelength_domain = False
-    # 如果 specType='auto'，默认使用波长域
-    pol_out = getattr(par, 'polOut', 'V')
-except Exception as e:
-    print(
-        f"Warning: failed to read specType from params, using wavelength domain: {e}"
-    )
-    wavelength_domain = True
-    pol_out = 'V'
+    def add_spot(self, **kwargs) -> SpotConfig:
+        """
+        添加单个spot
 
-print(
-    f"Output format: {'spec_pol (wavelength)' if wavelength_domain else 'lsd_pol (velocity)'}"
-)
+        参数: SpotConfig 的所有参数 (r, phi, amplitude, B_los, B_perp, chi等)
+        返回: SpotConfig对象
+        """
+        spot = SpotConfig(**kwargs)
+        self.spot_configs.append(spot)
+        if self.simulator is not None:
+            self.simulator.add_spot(spot)
+        
+        if self.verbose:
+            print(f"[SpotConfig] Added spot: r={spot.r:.2f}, phi={np.rad2deg(spot.phi):.1f}°, "
+                  f"amp={spot.amplitude:.2f}, B_los={spot.B_los:.1f}G")
+        
+        return spot
 
-# 构造光谱网格
-if wavelength_domain:
-    # 波长域：从 wl0-delta_wl 到 wl0+delta_wl
-    # delta_wl 对应于 ±200 km/s 的 Doppler 移动
-    delta_wl = wl0 * 200.0 / c
-    wl_grid = np.linspace(wl0 - delta_wl, wl0 + delta_wl, 401)
-    x_grid = wl_grid  # 输出时使用波长
-else:
-    # 速度域：-200 到 +200 km/s
-    v_range = np.linspace(-200, 200, 401)
-    wl_grid = wl0 * (1 + v_range / c)
-    x_grid = v_range  # 输出时使用速度
+    def add_spots(self, spots: List[SpotConfig]) -> None:
+        """添加多个spot"""
+        for spot in spots:
+            self.add_spot(
+                r=spot.r,
+                phi=spot.phi,
+                amplitude=spot.amplitude,
+                spot_type=spot.spot_type,
+                radius=spot.radius,
+                width_type=spot.width_type,
+                B_los=spot.B_los,
+                B_perp=spot.B_perp,
+                chi=spot.chi,
+                velocity_shift=spot.velocity_shift)
 
-for i, phase in enumerate(phases):
-    brightness, Br, Bphi = spot_geometry.generate_distributions(phase)
-    spots_evolved = spot_collection.get_spots_at_phase(phase)
-    incl_rad = np.deg2rad(inclination)
-    Blos = Br * np.sin(incl_rad) * np.cos(grid.phi)
-    # 横向场幅度，确保根号内非负
-    Bperp = np.sqrt(np.maximum(Br**2 + Bphi**2 - Blos**2, 0.0))
-    chi = grid.phi
-    v0_r0 = vsini / np.sin(incl_rad)
-    v_phi = v0_r0 * (grid.r / radius)**pOmega
-    v_los = v_phi * np.sin(incl_rad) * np.sin(grid.phi)
-    # 计算局部波长：考虑视向速度的 Doppler 移动
-    wl_local = wl_grid[:, None] / (1.0 + v_los[None, :] / c)
-    amp_local = brightness
-    profiles = linemodel.compute_local_profile(wl_local,
-                                               amp=amp_local,
-                                               Blos=Blos,
-                                               Bperp=Bperp,
-                                               chi=chi,
-                                               Ic_weight=grid.area)
-    stokes_i = np.sum(profiles['I'], axis=1)
-    stokes_v = np.sum(profiles['V'], axis=1)
-    stokes_q = np.sum(profiles['Q'], axis=1)
-    stokes_u = np.sum(profiles['U'], axis=1)
-    total_area = np.sum(grid.area)
-    if total_area > 0:
-        stokes_i = stokes_i / total_area
-        stokes_v = stokes_v / total_area
-        stokes_q = stokes_q / total_area
-        stokes_u = stokes_u / total_area
-    # 加噪声
-    sigma = 1.0 / SNR
-    noise_i = np.random.normal(0, sigma, stokes_i.shape)
-    noise_v = np.random.normal(0, sigma, stokes_v.shape)
-    noise_q = np.random.normal(0, sigma, stokes_q.shape)
-    noise_u = np.random.normal(0, sigma, stokes_u.shape)
-    stokes_i_noisy = stokes_i + noise_i
-    stokes_v_noisy = stokes_v + noise_v
-    stokes_q_noisy = stokes_q + noise_q
-    stokes_u_noisy = stokes_u + noise_u
+    def generate_tomog_model(self,
+                             output_file: Optional[str] = None,
+                             phase: float = 0.0,
+                             meta: Optional[Dict[str, Any]] = None) -> str:
+        """
+        生成.tomog模型文件
 
-    # 保存数据（支持波长域和速度域格式）
-    if wavelength_domain:
-        # spec_pol 格式：Wav Int Pol Null1 Null2 sigma_int
-        fname = os.path.join(output_dir, f'obs_phase_{i:02d}.spec')
-        with open(fname, 'w', encoding='utf-8') as f:
-            f.write('# Wav(nm) Int Pol Null1 Null2 sigma_int\n')
-            for j in range(len(wl_grid)):
-                # 根据 polOut 选择要输出的偏振分量
-                if pol_out == 'V':
-                    pol = stokes_v_noisy[j]
-                elif pol_out == 'Q':
-                    pol = stokes_q_noisy[j]
-                else:  # 'U'
-                    pol = stokes_u_noisy[j]
-                f.write(
-                    f"{wl_grid[j]:.6f} {stokes_i_noisy[j]:.8e} {pol:.8e} 0.0 0.0 {sigma:.3e}\n"
-                )
-        print(f'写入: {fname} (spec_pol格式，{len(wl_grid)}个波长点)')
-    else:
-        # lsd_pol 格式：RV Int sigma_int Pol sigma_pol Null1 sigma_null1
-        from core.SpecIO import write_model_spectrum
-        fname = os.path.join(output_dir, f'obs_phase_{i:02d}.lsd')
-        write_model_spectrum(
-            fname,
-            x_grid,  # 使用 v_range 或 wl_grid（取决于格式）
-            stokes_i_noisy,
-            V=stokes_v_noisy,
-            Q=stokes_q_noisy,
-            U=stokes_u_noisy,
-            sigmaI=np.full_like(stokes_i_noisy, sigma),
-            fmt="lsd",
-            pol_channel=pol_out,
-            include_null=True)
-        print(f'写入: {fname} (lsd_pol格式，{len(x_grid)}个速度点)')
+        参数:
+        -------
+        output_file : str, optional
+            输出文件路径（.tomog格式）
+            若不指定，使用默认 output/spot_model_phase_XXX.tomog
+        phase : float
+            演化相位 (0~1)
+        meta : dict, optional
+            额外的元信息
+
+        返回:
+        -------
+        str
+            输出文件路径
+        """
+        if self.simulator is None:
+            raise ValueError("Grid not setup. Call setup_grid() first.")
+        
+        # 生成默认输出文件名
+        if output_file is None:
+            output_file = self.output_dir / f"spot_model_phase_{phase:03.0f}.tomog"
+        else:
+            output_file = Path(output_file)
+        
+        # 准备元信息
+        if meta is None:
+            meta = {}
+        
+        # 添加配置信息到meta
+        meta.update({
+            'grid_nr': self.grid_params.get('nr'),
+            'grid_r_in': self.grid_params.get('r_in'),
+            'grid_r_out': self.grid_params.get('r_out'),
+            'n_spots': len(self.spot_configs),
+        })
+        
+        # 导出.tomog文件
+        result = self.simulator.export_to_geomodel(
+            str(output_file),
+            phase=phase,
+            meta=meta)
+        
+        if self.verbose:
+            print(f"[SpotConfig] Generated .tomog model: {result}")
+        
+        return result
+
+    def save_config_json(self, output_file: Optional[str] = None) -> str:
+        """
+        保存配置为JSON文件（便于复现）
+
+        参数:
+        -------
+        output_file : str, optional
+            输出JSON文件路径
+            若不指定，使用 output/spot_config.json
+
+        返回:
+        -------
+        str
+            输出文件路径
+        """
+        if output_file is None:
+            output_file = self.output_dir / "spot_config.json"
+        else:
+            output_file = Path(output_file)
+        
+        # 配置字典
+        config_dict = {
+            'grid_params': self.grid_params,
+            'geom_params': self.geom_params,
+            'spots': [
+                {
+                    'r': s.r,
+                    'phi': float(s.phi),
+                    'amplitude': s.amplitude,
+                    'spot_type': s.spot_type,
+                    'radius': s.radius,
+                    'width_type': s.width_type,
+                    'B_los': s.B_los,
+                    'B_perp': s.B_perp,
+                    'chi': float(s.chi),
+                    'velocity_shift': s.velocity_shift,
+                }
+                for s in self.spot_configs
+            ]
+        }
+        
+        # 写入JSON
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, 'w') as f:
+            json.dump(config_dict, f, indent=2)
+        
+        if self.verbose:
+            print(f"[SpotConfig] Saved configuration: {output_file}")
+        
+        return str(output_file)
+
+    def load_config_json(self, config_file: str) -> None:
+        """
+        从JSON文件加载配置
+
+        参数:
+        -------
+        config_file : str
+            JSON配置文件路径
+        """
+        with open(config_file, 'r') as f:
+            config_dict = json.load(f)
+        
+        # 恢复grid
+        grid_params = config_dict.get('grid_params', {})
+        geom_params = config_dict.get('geom_params', {})
+        
+        self.setup_grid(
+            nr=grid_params.get('nr', 40),
+            r_in=grid_params.get('r_in', 0.5),
+            r_out=grid_params.get('r_out', 4.0),
+            inclination_deg=geom_params.get('inclination_deg', 60.0),
+            pOmega=geom_params.get('pOmega', -0.5),
+            r0_rot=geom_params.get('r0_rot', 1.0),
+            period_days=geom_params.get('period_days', 1.0))
+        
+        # 恢复spot
+        spots = config_dict.get('spots', [])
+        for s in spots:
+            self.add_spot(**s)
+        
+        if self.verbose:
+            print(f"[SpotConfig] Loaded configuration from {config_file}")
+
+    def get_summary(self) -> str:
+        """获取配置摘要"""
+        summary = "Spot Simulation Configuration:\n"
+        summary += f"  Grid: nr={self.grid_params.get('nr')}, "
+        summary += f"r=[{self.grid_params.get('r_in')}, {self.grid_params.get('r_out')}]\n"
+        summary += f"  Geometry: i={self.geom_params.get('inclination_deg')}°, "
+        summary += f"pOmega={self.geom_params.get('pOmega')}, "
+        summary += f"r0={self.geom_params.get('r0_rot')}R*, "
+        summary += f"P={self.geom_params.get('period_days')}d\n"
+        summary += f"  Spots: {len(self.spot_configs)}\n"
+        for i, spot in enumerate(self.spot_configs):
+            summary += f"    [{i}] r={spot.r:.2f}, phi={np.rad2deg(spot.phi):.1f}°, "
+            summary += f"amp={spot.amplitude:.2f}, B_los={spot.B_los:.1f}G\n"
+        return summary
+
+
+# ============================================================================
+# 便捷函数
+# ============================================================================
+
+
+def create_example_spot_config() -> SpotSimulationConfig:
+    """创建示例配置"""
+    config = SpotSimulationConfig(verbose=1)
+    
+    # 设置grid和几何参数
+    config.setup_grid(
+        nr=40,
+        r_in=0.5,
+        r_out=4.0,
+        inclination_deg=60.0,
+        pOmega=-0.5,
+        r0_rot=1.0,
+        period_days=1.0)
+    
+    # 添加几个示例spot
+    config.add_spot(r=1.5, phi=0.0, amplitude=2.0, B_los=1000.0)
+    config.add_spot(r=2.0, phi=np.pi, amplitude=1.5, B_los=-500.0)
+    config.add_spot(r=3.0, phi=np.pi/2, amplitude=-1.5, spot_type='absorption')
+    
+    return config

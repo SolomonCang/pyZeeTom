@@ -24,10 +24,17 @@ MEM反演接口 - pyZeeTom项目特定参数化
 """
 
 import numpy as np
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 from dataclasses import dataclass
 
 from core.mem_generic import MEMOptimizer, _get_c_gradc
+
+# Week 2 优化：导入缓存和数据流管理工具
+try:
+    from core.mem_optimization import ResponseMatrixCache, DataPipeline
+except ImportError:
+    ResponseMatrixCache = None
+    DataPipeline = None
 
 
 @dataclass
@@ -173,6 +180,12 @@ class MEMTomographyAdapter:
         self.default_bperp = default_bperp
         self.default_chi = default_chi
 
+        # 初始化缓存和数据流支持（延迟初始化）
+        self.resp_cache = ResponseMatrixCache(
+            max_size=10) if ResponseMatrixCache else None
+        self.data_pipeline = None  # 延迟初始化，需要在运行时传入观测数据
+        self._constraint_cache = {}  # 简单约束计算缓存
+
         self.optimizer = MEMOptimizer(
             compute_entropy_callback=self.compute_entropy_callback,
             compute_constraint_callback=self.compute_constraint_callback,
@@ -279,10 +292,35 @@ class MEMTomographyAdapter:
 
         χ² = sum_k [(F_k - D_k)^2 / sigma_k^2]
 
+        使用简单缓存加速重复计算。
+
         返回：
             (C0, gradC)
         """
-        return _get_c_gradc(Data, Fmodel, sig2, Resp)
+        # 生成缓存键（基于 Resp 和 Data 的哈希）
+        try:
+            resp_key = hash(Resp.tobytes())
+            data_key = hash(Data.tobytes())
+            cache_key = (resp_key, data_key)
+
+            # 检查缓存
+            if cache_key in self._constraint_cache:
+                return self._constraint_cache[cache_key]
+        except (TypeError, ValueError):
+            # 如果无法哈希（如大数组），跳过缓存
+            cache_key = None
+
+        # 计算约束
+        C0, gradC = _get_c_gradc(Data, Fmodel, sig2, Resp)
+
+        # 存储到缓存（如果键有效）
+        if cache_key is not None:
+            # 限制缓存大小
+            if len(self._constraint_cache) > 20:
+                self._constraint_cache.pop(next(iter(self._constraint_cache)))
+            self._constraint_cache[cache_key] = (C0, gradC)
+
+        return C0, gradC
 
     def apply_boundary_constraints(
             self, Image: np.ndarray, n1: int, n2: int, ntot: int,
@@ -462,6 +500,36 @@ class MEMTomographyAdapter:
         Resp = np.zeros((ndata, nparam))
 
         return Data, Fmodel, sig2, Resp
+
+    def init_data_pipeline(self,
+                           observations: List[Any],
+                           fit_I: bool = True,
+                           fit_V: bool = True,
+                           fit_Q: bool = False,
+                           fit_U: bool = False) -> None:
+        """
+        初始化数据流水线（可选）。
+
+        如果提供了观测数据，DataPipeline 可预处理和验证数据一致性。
+
+        参数：
+            observations: 观测数据对象列表
+            fit_I/V/Q/U: 是否拟合各分量
+        """
+        if DataPipeline is None:
+            return  # 如果 DataPipeline 不可用，优雅降级
+
+        try:
+            self.data_pipeline = DataPipeline(observations=observations,
+                                              fit_I=fit_I,
+                                              fit_V=fit_V,
+                                              fit_Q=fit_Q,
+                                              fit_U=fit_U,
+                                              verbose=0)
+        except Exception as e:
+            # 如果初始化失败，记录警告但继续
+            print(f"Warning: Failed to initialize DataPipeline: {e}")
+            self.data_pipeline = None
 
     def set_entropy_weights(self,
                             npix: int,

@@ -97,6 +97,9 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
         enable_V = bool(kwargs.get("enable_V", self.enable_V_default))
         enable_QU = bool(kwargs.get("enable_QU", self.enable_QU_default))
 
+        Bperp = kwargs.get("Bperp", None)
+        chi = kwargs.get("chi", None)
+
         # 像素权重（可选）：用于最终输出的加权，不改变谱线基线=1
         Ic_weight = kwargs.get("Ic_weight", None)
 
@@ -122,6 +125,18 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
         sig = float(self.ld.sigWl)
         d = (wl_grid - self.ld.wl0) / sig
         G = np.exp(-(d * d))
+
+        # Debug print (once)
+        if not hasattr(self, '_debug_printed'):
+            print(f"[LineModel] wl0={self.ld.wl0}, sig={sig}")
+            print(
+                f"[LineModel] wl_grid range: {np.min(wl_grid):.4f} - {np.max(wl_grid):.4f}"
+            )
+            print(f"[LineModel] d range: {np.min(d):.4f} - {np.max(d):.4f}")
+            print(f"[LineModel] G max: {np.max(G):.4f}")
+            if Blos is not None:
+                print(f"[LineModel] Blos max: {np.max(Blos):.4f}")
+            self._debug_printed = True
 
         # I（连续谱=1）
         I = 1.0 + amp * G
@@ -162,3 +177,68 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
             U = U * w
 
         return {"I": I, "V": V, "Q": Q, "U": U}
+
+
+class ConstantAmpLineModel(BaseLineModel):
+    """
+    以恒定强度包裹基础谱线模型的适配器。
+
+    提供一个方便的接口，使用常数振幅运行任意基础谱线模型
+    而无需显式传递 amp 参数。这在前向建模中很有用，
+    其中亮度分布假设为已知（固定）。
+
+    Parameters
+    ----------
+    base_model : BaseLineModel
+        底层谱线模型对象，应具有
+        compute_local_profile(wl_grid, amp, **kwargs) 方法
+    amp : float, default=1.0
+        恒定振幅值（应用于所有像素）
+
+    Attributes
+    ----------
+    base_model : BaseLineModel
+        底层模型
+    amp : float
+        恒定振幅
+
+    Examples
+    --------
+    >>> from core.local_linemodel_basic import LineData, GaussianZeemanWeakLineModel, ConstantAmpLineModel
+    >>> ld = LineData('input/lines.txt')
+    >>> base = GaussianZeemanWeakLineModel(ld)
+    >>> adapter = ConstantAmpLineModel(base, amp=0.5)
+    >>>
+    >>> # 不需要传递 amp，使用恒定值
+    >>> wl_grid = np.linspace(6562.5, 6563.5, 200)  # 仅波长网格
+    >>> result = adapter.compute_local_profile(wl_grid, Blos=np.zeros(100))
+    >>> print(result['I'].shape)  # (200, 100)
+    """
+
+    def __init__(self, base_model: BaseLineModel, amp: float = 1.0):
+        """Initialize ConstantAmpLineModel."""
+        self.base_model = base_model
+        self.amp = float(amp)
+
+    def compute_local_profile(self, wl_grid, amp_unused=None, **kwargs):
+        """计算本地谱线型，使用存储的恒定振幅。
+
+        Parameters
+        ----------
+        wl_grid : np.ndarray
+            波长网格
+        amp_unused : ignored
+            此参数被忽略，使用 self.amp 代替
+        **kwargs
+            传递给 base_model.compute_local_profile 的其他关键字参数
+
+        Returns
+        -------
+        dict
+            包含 'I', 'V', 'Q', 'U' 键的字典，对应计算的 Stokes 参数
+        """
+        # 从 kwargs 中移除 amp（如果存在），因为我们要使用 self.amp
+        kwargs.pop('amp', None)
+
+        return self.base_model.compute_local_profile(wl_grid, self.amp,
+                                                     **kwargs)

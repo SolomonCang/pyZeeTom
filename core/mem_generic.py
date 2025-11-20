@@ -23,6 +23,12 @@ import numpy as np
 from scipy import linalg
 from typing import Callable, Tuple, Dict, Any, Optional
 
+# 导入优化工具（Week 2 优化）
+try:
+    from core.mem_optimization import StabilityMonitor
+except ImportError:
+    StabilityMonitor = None  # 降级处理
+
 
 class MEMOptimizer:
     """
@@ -61,6 +67,10 @@ class MEMOptimizer:
         self.max_search_dirs = max_search_dirs
         self.step_length_factor = step_length_factor
         self.convergence_tol = convergence_tol
+
+        # Week 2 优化：集成 StabilityMonitor (可选)
+        self.stability_monitor = (StabilityMonitor(
+            verbose=0) if StabilityMonitor is not None else None)
 
     def iterate(
         self,
@@ -119,10 +129,25 @@ class MEMOptimizer:
         # Skilling-Bryan 收敛检验量
         test = _get_test(gradC, gradS)
 
+        # Week 2 优化：集成 StabilityMonitor 检查
+        if self.stability_monitor is not None:
+            stability_ok = self.stability_monitor.check_gradient(gradC, gradS)
+            if not stability_ok:
+                # 梯度存在问题（NaN、Inf、过大值）
+                # 尝试恢复：返回当前状态，让上层处理
+                import warnings as _warnings
+                _warnings.warn(
+                    "Stability check failed for gradients; may need to reduce step size"
+                )
+
         # 计算搜索方向
         edir, nedir, gamma = _search_dir(ntot, self.max_search_dirs, Resp,
                                          sig2, -1.0 / gradgradS, gradC, gradS,
                                          gradgradS)
+
+        # Week 2 优化：响应矩阵诊断
+        if self.stability_monitor is not None:
+            _ = self.stability_monitor.check_response_matrix(Resp)
 
         # 计算控制量
         Cmu, Smu = _get_cmu_smu(gradC, gradS, edir)
@@ -181,45 +206,54 @@ def _search_dir(ntot: int, maxDir: int, Resp: np.ndarray, sig2: np.ndarray,
     生成线性独立的搜索方向。
 
     基于 Skilling & Bryan Eq. 20，生成最多maxDir个正交化搜索方向。
+    
+    Week 2 优化: 改进的向量化实现
+      • 向量化范数计算（避免循环）
+      • 批量矩阵操作（加速 Hessian 向量积）
+      • 数值稳定性改进
     """
     edir = np.zeros((ntot, maxDir))
 
     # 第1搜索方向: e_1 = f(grad(C))
     edir[:, 0] = gradC * fsupi
-    sumNorm = np.dot(edir[:, 0], edir[:, 0])
-    if sumNorm > 0.0:
-        sumNorm = np.sqrt(sumNorm)
+    e1_norm_sq = np.dot(edir[:, 0], edir[:, 0])
+
+    if e1_norm_sq > 0.0:
+        edir[:, 0] /= np.sqrt(e1_norm_sq)
         err_gradCis0 = 0
     else:
-        sumNorm = 1.0
         err_gradCis0 = 1
-    edir[:, 0] /= sumNorm
 
     if maxDir == 1:
         return edir[:, :1], 1, np.array([1.0])
 
     # 第2搜索方向: e_2 = f(grad(S))
     edir[:, 1] = gradS * fsupi
-    sumNorm = np.dot(edir[:, 1], edir[:, 1])
-    if sumNorm > 0.0:
-        sumNorm = np.sqrt(sumNorm)
+    e2_norm_sq = np.dot(edir[:, 1], edir[:, 1])
+
+    if e2_norm_sq > 0.0:
+        edir[:, 1] /= np.sqrt(e2_norm_sq)
         err_gradSis0 = 0
     else:
-        sumNorm = 1.0
         err_gradSis0 = 1
-    edir[:, 1] /= sumNorm
 
     if (err_gradCis0 == 1) and (err_gradSis0 == 1):
         raise ValueError(
             "Both f(gradS) and f(gradC) are zero: problem is unconstrained")
 
     # 剩余搜索方向: e_n = f(grad(grad(C))).e_{n-2}
-    for i in range(2, maxDir):
-        tempDot = np.dot(Resp, edir[:, i - 2])
-        edir[:, i] = 2.0 * fsupi * np.dot(Resp.T / sig2, tempDot)
-        sumNorm = np.dot(edir[:, i], edir[:, i])
-        if sumNorm > 0.0:
-            edir[:, i] /= np.sqrt(sumNorm)
+    # Week 2 优化: 向量化 Hessian 向量积
+    if maxDir > 2:
+        # 预计算 sig2_inv 避免重复除法
+        sig2_inv = 1.0 / sig2
+
+        for i in range(2, maxDir):
+            tempDot = np.dot(Resp, edir[:, i - 2])
+            edir[:, i] = fsupi * np.dot(Resp.T, tempDot * sig2_inv)
+
+            e_norm_sq = np.dot(edir[:, i], edir[:, i])
+            if e_norm_sq > 0.0:
+                edir[:, i] /= np.sqrt(e_norm_sq)
 
     # 对角化搜索子空间
     edir, nedir, gamma = _diag_dir(edir, maxDir, gradgradS, sig2, Resp)

@@ -494,7 +494,7 @@ def write_model_spectrum(filename: str,
                 pol = V
             elif pol_channel == 'Q':
                 pol = Q
-            else:
+            elif pol_channel == 'U':
                 pol = U
             pol = np.zeros_like(Iprof) if pol is None else np.asarray(
                 pol, dtype=float)
@@ -597,4 +597,131 @@ def save_results_series(results: List[Tuple[np.ndarray, np.ndarray,
         header = {"phase_index": str(i)}
         write_model_spectrum(fname, x, I, V=V, fmt=fmt, header=header)
         paths.append(fname)
+    return paths
+
+
+def save_model_spectra_with_polchannel(
+    phase_results,
+    pol_channel="I",
+    output_dir="output/outModelSpec",
+    file_type_hint="spec",
+    verbose=0,
+):
+    """保存合成谱线，按 pol_channel 选择 Stokes 分量。
+
+    将 phase_results 中的各相位合成谱线按指定的偏振通道保存为文件。
+    每个相位生成一个文件：
+    phase_{phase_index:04d}_{HJD}_{VRinfo}_{channel}.{ext}
+
+    Parameters
+    ----------
+    phase_results : list of dict
+        各相位结果列表，每项为字典，包含：
+        - 'phase': int，相位索引
+        - 'wl': np.ndarray，波长
+        - 'I': np.ndarray，Stokes I
+        - 'V': np.ndarray or None，Stokes V
+        - 'Q': np.ndarray or None，Stokes Q
+        - 'U': np.ndarray or None，Stokes U
+        - 'sigma': np.ndarray，误差
+        - 'HJD': float，修正儒略日
+        - 'VRinfo': str，速度信息字符串
+    pol_channel : str, default="I"
+        偏振通道选择，可选值为 "I", "V", "Q", "U"
+    output_dir : str, default="output/outModelSpec"
+        输出目录路径
+    file_type_hint : str, default="spec"
+        文件格式提示，传递给 write_model_spectrum
+        (支持 "spec_pol", "spec_i", "lsd_pol", "lsd_i" 等)
+    verbose : int, default=0
+        详细程度 (0=安静, 1=正常, 2=详细)
+
+    Returns
+    -------
+    list of str
+        写出的文件路径列表
+    """
+    from pathlib import Path
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # 映射 pol_channel 到数据字段
+    channel_map = {"I": "I", "V": "V", "Q": "Q", "U": "U"}
+    if pol_channel not in channel_map:
+        raise ValueError(
+            f"pol_channel 必须为 'I', 'V', 'Q', 或 'U'，收到 '{pol_channel}'")
+
+    paths = []
+    for res in phase_results:
+        phase_idx = res.get("phase", 0)
+        wl = res.get("wl")
+        sigma = res.get("sigma")
+        HJD = res.get("HJD", 0.0)
+        VRinfo = res.get("VRinfo", "VRp0p00")
+
+        if wl is None:
+            if verbose:
+                print(f"[SpecIO] 跳过相位 {phase_idx}：无波长数据")
+            continue
+
+        # 选择指定的 Stokes 分量
+        if pol_channel == "I":
+            data = res.get("I")
+        elif pol_channel == "V":
+            data = res.get("V")
+        elif pol_channel == "Q":
+            data = res.get("Q")
+        elif pol_channel == "U":
+            data = res.get("U")
+        else:
+            data = None
+
+        if data is None:
+            if verbose:
+                print(f"[SpecIO] 相位 {phase_idx} 缺少 {pol_channel} 数据，跳过")
+            continue
+
+        # 构建文件名
+        HJD_str = f"{HJD:.3f}".replace(".", "p")
+        filename = (
+            f"phase_{phase_idx:04d}_HJD{HJD_str}_{VRinfo}_{pol_channel}.spec")
+        filepath = output_path / filename
+
+        # 准备其他 Stokes 分量（缺失则为 None）
+        V_data = res.get("V") if pol_channel != "V" else None
+        Q_data = res.get("Q") if pol_channel != "Q" else None
+        U_data = res.get("U") if pol_channel != "U" else None
+
+        # 调用 write_model_spectrum 保存
+        header = {
+            "phase": str(phase_idx),
+            "HJD": str(HJD),
+            "pol_channel": pol_channel,
+            "VRinfo": VRinfo,
+        }
+        try:
+            write_model_spectrum(
+                str(filepath),
+                wl,
+                data,
+                V=V_data,
+                Q=Q_data,
+                U=U_data,
+                sigmaI=sigma,
+                fmt=file_type_hint,
+                header=header,
+            )
+            paths.append(str(filepath))
+            if verbose:
+                print(
+                    f"[SpecIO] 已保存相位 {phase_idx} {pol_channel} 通道到 {filename}")
+        except Exception as e:
+            if verbose:
+                print(f"[SpecIO] 保存相位 {phase_idx} 失败：{e}")
+            continue
+
+    if verbose:
+        print(f"[SpecIO] 共保存 {len(paths)} 个谱线文件")
+
     return paths
