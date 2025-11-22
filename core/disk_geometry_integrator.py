@@ -15,9 +15,7 @@ Functions
 ---------
 create_disk_geometry_from_params : Create geometry from parameter objects
 convolve_gaussian_1d : Gaussian convolution utility
-disk_velocity_adaptive_inner_omega_sequence : Adaptive inner region velocity profile
-disk_velocity_continuous_omega : Continuous velocity profile with inner slowdown
-slowdown_profile_sequence : Slowdown profile generation
+disk_velocity_rigid_inner : Rigid body inner rotation velocity profile
 """
 
 import numpy as np
@@ -29,9 +27,7 @@ __all__ = [
     'VelspaceDiskIntegrator',
     'create_disk_geometry_from_params',
     'convolve_gaussian_1d',
-    'disk_velocity_adaptive_inner_omega_sequence',
-    'disk_velocity_continuous_omega',
-    'slowdown_profile_sequence',
+    'disk_velocity_rigid_inner',
 ]
 
 C_KMS = 2.99792458e5  # km/s
@@ -74,138 +70,8 @@ def convolve_gaussian_1d(y, dv, fwhm):
     return conv
 
 
-def slowdown_profile_sequence(n, kind="cosine"):
-    """Generate velocity slowdown profile sequence.
-    
-    Parameters
-    ----------
-    n : int
-        Number of rings
-    kind : str, default="cosine"
-        Profile type: "linear", "quadratic", "cubic", or "cosine"
-    
-    Returns
-    -------
-    np.ndarray
-        Slowdown profile (n,) with values in [0, 1]
-    """
-    n = int(n)
-    if n <= 1:
-        return np.array([0.0], dtype=float)
-    k = np.arange(n, dtype=float)
-    t = k / (n - 1.0)
-    if kind == "linear":
-        s = 1.0 - t
-    elif kind == "quadratic":
-        s = (1.0 - t)**2
-    elif kind == "cubic":
-        s = (1.0 - t)**3
-    else:  # cosine
-        s = 0.5 * (1.0 + np.cos(np.pi * t))
-    return s
-
-
-def disk_velocity_adaptive_inner_omega_sequence(grid,
-                                                v0_r0,
-                                                p,
-                                                r0,
-                                                profile="cosine",
-                                                blend_edge=True):
-    """Compute disk velocity with adaptive inner region using Omega sequence.
-    
-    Parameters
-    ----------
-    grid : diskGrid
-        Disk grid object
-    v0_r0 : float
-        Velocity at reference radius (km/s)
-    p : float
-        Power index for outer region
-    r0 : float
-        Reference radius
-    profile : str, default="cosine"
-        Inner slowdown profile type
-    blend_edge : bool, default=True
-        Enable edge blending
-    
-    Returns
-    -------
-    np.ndarray
-        Line-of-sight velocity projection for each pixel
-    """
-    r_centers = grid.r_centers
-    nr = len(r_centers)
-    if nr == 0:
-        return np.zeros(0, dtype=float)
-
-    rr0 = float(max(r0, 1e-30))
-    Omega0 = float(v0_r0) / rr0
-
-    diff = rr0 - r_centers
-    mask_in = diff > 0
-    if np.any(mask_in):
-        start_ring = np.where(mask_in)[0][-1]
-    else:
-        start_ring = int(np.argmin(np.abs(r_centers - rr0)))
-
-    N_inner = start_ring + 1
-    seq = slowdown_profile_sequence(N_inner, kind=profile)  # s[0]=1, s[-1]=0
-
-    v_ring = np.zeros(nr, dtype=float)
-    for ir in range(nr):
-        r_c = float(r_centers[ir])
-        if r_c >= rr0:
-            x = r_c / rr0
-            Omega = Omega0 * (x**p)
-            v_ring[ir] = r_c * Omega
-        else:
-            offset = start_ring - ir
-            if 0 <= offset < N_inner:
-                Omega = Omega0 * seq[offset]
-                v_ring[ir] = r_c * Omega
-            else:
-                v_ring[ir] = 0.0
-
-    if blend_edge and 0 <= start_ring < nr:
-        if hasattr(grid, "dr"):
-            dr_ring = float(grid.dr[start_ring])
-        else:
-            dr_ring = float(grid.r_edges[start_ring + 1] -
-                            grid.r_edges[start_ring])
-        r_center = float(r_centers[start_ring])
-        rel = (rr0 - r_center) / max(dr_ring, 1e-30)
-        rel = float(np.clip(rel, -0.5, 0.5))
-        w_outer = float(np.clip(0.5 + rel, 0.0, 1.0))
-
-        x = (r_center / rr0) if rr0 > 0 else 0.0
-        Omega_outer = Omega0 * (x**p) if r_center >= rr0 else Omega0
-        v_start_outer = r_center * Omega_outer
-
-        Omega_seq = Omega0 * seq[0]
-        v_start_seq = r_center * Omega_seq
-
-        v_ring[start_ring] = w_outer * v_start_outer + (1.0 -
-                                                        w_outer) * v_start_seq
-
-        next_inner = start_ring - 1
-        if next_inner >= 0 and N_inner >= 2:
-            w = 0.2
-            v_ring[next_inner] = (
-                1 - w) * v_ring[next_inner] + w * v_ring[start_ring]
-
-    v_phi = v_ring[grid.ring_id]
-    return v_phi
-
-
-def disk_velocity_continuous_omega(r,
-                                   v0_r0,
-                                   p,
-                                   r0,
-                                   enable_inner_slowdown=True,
-                                   inner_mode="poly",
-                                   inner_alpha=0.6,
-                                   inner_beta=2.0):
-    """Compute continuous disk velocity profile with inner slowdown.
+def disk_velocity_rigid_inner(r, v0_r0, p, r0):
+    """Compute disk velocity with rigid body rotation inside r0.
     
     Parameters
     ----------
@@ -217,15 +83,7 @@ def disk_velocity_continuous_omega(r,
         Power index for outer region
     r0 : float
         Reference radius
-    enable_inner_slowdown : bool, default=True
-        Enable inner region slowdown
-    inner_mode : str, default="poly"
-        Inner slowdown mode: "poly" or "lat"
-    inner_alpha : float, default=0.6
-        Inner slowdown parameter
-    inner_beta : float, default=2.0
-        Inner slowdown exponent
-    
+        
     Returns
     -------
     np.ndarray
@@ -236,20 +94,18 @@ def disk_velocity_continuous_omega(r,
     Omega0 = float(v0_r0) / rr0
     x = r / rr0
 
-    if not enable_inner_slowdown:
-        return r * Omega0 * np.power(x, p)
+    # Omega profile:
+    # r < r0: Omega = Omega0 (Rigid body)
+    # r >= r0: Omega = Omega0 * (r/r0)^p
 
-    xc = np.clip(x, 0.0, 1.0)
-    if inner_mode == "poly":
-        f = 1.0 - inner_alpha * (1.0 - np.power(xc, inner_beta))
-    elif inner_mode == "lat":
-        f = xc * (1.0 - inner_alpha * (1.0 - xc * xc))
-    else:
-        raise ValueError("inner_mode must be 'poly' or 'lat'")
+    Omega = np.zeros_like(r)
+    mask_inner = x < 1.0
+    mask_outer = ~mask_inner
 
-    v_out = r * Omega0 * np.power(np.maximum(x, 1.0), p)
-    v_in = r * Omega0 * f
-    v = np.where(x >= 1.0, v_out, v_in)
+    Omega[mask_inner] = Omega0
+    Omega[mask_outer] = Omega0 * np.power(x[mask_outer], p)
+
+    v = r * Omega
     return v
 
 
@@ -457,22 +313,10 @@ class VelspaceDiskIntegrator:
         Use geometry's v_los if available, else compute from disk velocity
     disk_v0_kms : float, default=200.0
         Velocity at reference radius (km/s)
-    disk_power_index : float, default=-0.5
+    disk_power_index : float, default=-0.05
         Power index for outer region
     disk_r0 : float, default=1.0
         Reference radius
-    inner_slowdown_mode : str, default="adaptive"
-        Inner region velocity mode: "adaptive" or "continuous"
-    inner_profile : str, default="cosine"
-        Inner slowdown profile type
-    inner_edge_blend : bool, default=True
-        Enable edge blending at transition region
-    inner_mode : str, default="poly"
-        Continuous inner mode: "poly" or "lat"
-    inner_alpha : float, default=0.6
-        Inner slowdown parameter
-    inner_beta : float, default=2.0
-        Inner slowdown exponent
     los_proj_func : callable, optional
         Custom line-of-sight projection function
     obs_phase : float, optional
@@ -489,20 +333,12 @@ class VelspaceDiskIntegrator:
             line_model,  # Required parameter
             line_area=1.0,
             inst_fwhm_kms=0.0,
-            normalize_continuum=True,
+            normalize_continuum=False,
             # Velocity field parameters (outer region power-law)
             use_geom_vlos_if_available=True,
-            disk_v0_kms=200.0,
-            disk_power_index=-0.5,
-            disk_r0=1.0,
-            # Inner slowdown mode
-            inner_slowdown_mode="adaptive",
-            inner_profile="cosine",
-            inner_edge_blend=True,
-            # Continuous mode parameters
-            inner_mode="poly",
-            inner_alpha=0.6,
-            inner_beta=2.0,
+            disk_v0_kms=50.0,
+            disk_power_index=-0.05,
+            disk_r0=0.8,
             # Line-of-sight projection
             los_proj_func=None,
             obs_phase=None,
@@ -550,28 +386,12 @@ class VelspaceDiskIntegrator:
             self._disk_v0_kms = v0_r0
             self._disk_power_index = p
             self._disk_r0 = r0
-            mode = str(inner_slowdown_mode).lower()
-            if mode == "adaptive":
-                v_phi = disk_velocity_adaptive_inner_omega_sequence(
-                    self.grid,
-                    v0_r0=v0_r0,
-                    p=p,
-                    r0=r0,
-                    profile=str(inner_profile).lower(),
-                    blend_edge=bool(inner_edge_blend))
-            elif mode == "continuous":
-                v_phi = disk_velocity_continuous_omega(
-                    self.grid.r,
-                    v0_r0=v0_r0,
-                    p=p,
-                    r0=r0,
-                    enable_inner_slowdown=True,
-                    inner_mode=str(inner_mode),
-                    inner_alpha=float(inner_alpha),
-                    inner_beta=float(inner_beta))
-            else:
-                raise ValueError(
-                    "inner_slowdown_mode must be 'adaptive' or 'continuous'")
+
+            # Use rigid inner rotation model (r < r0: rigid, r >= r0: power law)
+            v_phi = disk_velocity_rigid_inner(self.grid.r,
+                                              v0_r0=v0_r0,
+                                              p=p,
+                                              r0=r0)
 
             # Line-of-sight projection (using evolved phi)
             if los_proj_func is not None:
@@ -654,7 +474,9 @@ class VelspaceDiskIntegrator:
         Returns
         -------
         np.ndarray
-            Stokes I spectrum
+            Stokes I spectrum.
+            Note: Stokes V, Q, U spectra are also computed and stored as
+            self.V, self.Q, self.U attributes.
         """
         # Update geometry if parameters provided
         if B_los is not None:
@@ -675,6 +497,11 @@ class VelspaceDiskIntegrator:
         # Update local amp reference for diagnostics
         self.amp = amp_arr
 
+        # Convert intensity-like amp (1=continuum) to additive amp (0=continuum)
+        # as expected by GaussianZeemanWeakLineModel
+        # User requirement: amp=1 -> no signal, amp<1 -> absorption
+        amp_model = amp_arr
+
         # Magnetic fields
         if hasattr(self.geom, "B_los") and self.geom.B_los is not None:
             Blos_arr = np.asarray(self.geom.B_los)
@@ -694,7 +521,7 @@ class VelspaceDiskIntegrator:
         # Compute local profiles
         profiles = self.line_model.compute_local_profile(
             self.wl_cells,
-            amp_arr,
+            amp_model,
             Blos=Blos_arr,
             Bperp=Bperp_arr,
             chi=chi_arr,
@@ -714,20 +541,26 @@ class VelspaceDiskIntegrator:
         if U_loc is None:
             U_loc = np.zeros_like(I_loc)
 
+        # Subtract continuum contribution from I_loc before summing to get pure signal deviation
+        # I_loc = (1 + signal) * weight = weight + signal * weight
+        # I_dev = I_loc - weight = signal * weight
+        I_dev = I_loc - self.Ic_weight
+
         # Sum over pixels
-        I_sum = np.sum(I_loc, axis=1)
+        I_sum_dev = np.sum(I_dev, axis=1)
         V_sum = np.sum(V_loc, axis=1)
         Q_sum = np.sum(Q_loc, axis=1)
         U_sum = np.sum(U_loc, axis=1)
 
         # Instrumental convolution
         if self.inst_fwhm > 0.0:
-            I_conv = convolve_gaussian_1d(I_sum, self.dv, self.inst_fwhm)
+            I_conv_dev = convolve_gaussian_1d(I_sum_dev, self.dv,
+                                              self.inst_fwhm)
             V_conv = convolve_gaussian_1d(V_sum, self.dv, self.inst_fwhm)
             Q_conv = convolve_gaussian_1d(Q_sum, self.dv, self.inst_fwhm)
             U_conv = convolve_gaussian_1d(U_sum, self.dv, self.inst_fwhm)
         else:
-            I_conv = I_sum
+            I_conv_dev = I_sum_dev
             V_conv = V_sum
             Q_conv = Q_sum
             U_conv = U_sum
@@ -736,17 +569,17 @@ class VelspaceDiskIntegrator:
         if self.normalize_continuum:
             baseline = 1.0
             if self.cont > 0:
-                self.I = (I_conv - self.cont) / self.cont + baseline
+                self.I = baseline + I_conv_dev / self.cont
                 self.V = V_conv / self.cont
                 self.Q = Q_conv / self.cont
                 self.U = U_conv / self.cont
             else:
-                self.I = I_conv
+                self.I = np.full_like(I_conv_dev, baseline)
                 self.V = V_conv
                 self.Q = Q_conv
                 self.U = U_conv
         else:
-            self.I = I_conv
+            self.I = self.cont + I_conv_dev
             self.V = V_conv
             self.Q = Q_conv
             self.U = U_conv

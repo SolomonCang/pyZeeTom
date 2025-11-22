@@ -19,7 +19,7 @@ from scipy.interpolate import griddata
 PARAM_CONFIG = {
     # 输入文件路径
     # 'model_path': 'output/spot_forward/spot_model_phase_0p00.tomog',
-    'model_path': 'output/spot_forward/simuspec/geomodel_phase_00.tomog',
+    'model_path': 'output/spot_forward/geomodel_phase_00.tomog',
 
     # 输出文件路径 (设为 None 则直接显示窗口，设为 'filename.png' 则保存)
     'out_fig': None,

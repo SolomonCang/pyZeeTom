@@ -7,9 +7,26 @@
 #   4. 注意：谱线合成由 pyzeetom/tomography.py 的0-iter正演处理
 #           通过 initTomogFile 参数加载模型
 
-import numpy as np
-from typing import List, Optional, Dict, Any
+import datetime as dt
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+from scipy import interpolate
+
+# 项目内部模块导入
+# 注意：如果存在循环依赖问题，部分导入可能需要放回函数内部
+try:
+    from core.disk_geometry_integrator import (SimpleDiskGeometry,
+                                               VelspaceDiskIntegrator)
+    from core.grid_tom import diskGrid
+    from core.local_linemodel_basic import (GaussianZeemanWeakLineModel,
+                                            LineData)
+    from core.tomography_result import ForwardModelResult
+except ImportError:
+    # 仅为了防止在缺少 core 模块的环境下语法检查报错，实际运行时应确保 core 在路径中
+    pass
 
 
 @dataclass
@@ -246,8 +263,6 @@ class SpotSimulator:
         SimpleDiskGeometry
             几何对象，包含网格、磁场参数、谱线振幅等
         """
-        from core.disk_geometry_integrator import SimpleDiskGeometry
-
         # 应用spot到网格
         self.apply_spots_to_grid(phase)
 
@@ -291,9 +306,6 @@ class SpotSimulator:
         str
             输出文件路径
         """
-        from pathlib import Path
-        from core.disk_geometry_integrator import VelspaceDiskIntegrator
-
         # 创建几何对象
         geom = self.create_geometry_object(phase=phase)
 
@@ -308,7 +320,6 @@ class SpotSimulator:
         try:
             # 尝试创建完整的积分器（需要谱线模型）
             # 但仅用于调用 write_geomodel，不需要完整的spectral synthesis
-            from core.local_linemodel_basic import GaussianZeemanWeakLineModel, LineData
             line_data = LineData('input/lines.txt')
             line_model = GaussianZeemanWeakLineModel(line_data)
 
@@ -326,8 +337,6 @@ class SpotSimulator:
 
         except Exception as e:
             # 如果无法创建完整的积分器，使用简化的导出方法
-            import datetime as dt
-
             print(
                 f"[SpotSimulator] Warning: Could not use VelspaceDiskIntegrator.write_geomodel(): {e}"
             )
@@ -507,11 +516,6 @@ class SpotSimulator:
         if len(self.phases) == 0:
             raise ValueError("必须先调用 configure_multi_phase_synthesis()")
 
-        from core.tomography_result import ForwardModelResult
-        from core.local_linemodel_basic import GaussianZeemanWeakLineModel, LineData
-        from core.disk_geometry_integrator import VelspaceDiskIntegrator
-        from scipy import interpolate
-
         if verbose:
             print(f"[SpotSimulator] 生成 {len(self.phases)} 个相位的合成模型...")
 
@@ -610,8 +614,9 @@ class SpotSimulator:
 
 
 def add_noise_to_spectrum(spectrum,
-                          noise_type='poisson',
+                          noise_type='gaussian',
                           snr=None,
+                          snr_linear=None,
                           sigma=None,
                           seed=None):
     """
@@ -624,9 +629,12 @@ def add_noise_to_spectrum(spectrum,
     noise_type : str
         噪声类型：'poisson'（泊松噪声）、'gaussian'（高斯噪声）、'mixed'（混合）
     snr : float, optional
-        信噪比（dB）。若提供，自动计算 sigma
+        信噪比（dB）。若提供，自动计算 sigma。
+    snr_linear : float, optional
+        线性信噪比 (Signal/Noise)。例如 100 表示 S/N = 100。
+        若提供，优先级高于 snr (dB)。
     sigma : float, optional
-        高斯噪声标准差
+        高斯噪声标准差。若提供，优先级最高。
     seed : int, optional
         随机数种子
 
@@ -642,16 +650,25 @@ def add_noise_to_spectrum(spectrum,
 
     if noise_type == 'poisson':
         # 泊松噪声：假设光子计数
+        # 注意：泊松噪声通常需要知道真实的电子数/光子数，这里直接对归一化光谱做泊松可能不物理
+        # 除非 spectrum 已经是光子数
         spectrum_noisy = np.random.poisson(spectrum)
 
     elif noise_type == 'gaussian':
         if sigma is None:
-            if snr is not None:
+            signal_level = np.mean(np.abs(spectrum))
+            # 如果 spectrum 是 Stokes V/Q/U，均值可能接近 0，这时用 max(abs) 可能更合适
+            # 或者通常 S/N 是相对于连续谱强度定义的 (Ic=1)
+            if signal_level < 0.1:  # 可能是偏振谱
+                signal_level = 1.0  # 假设相对于连续谱定义噪声
+
+            if snr_linear is not None:
+                sigma = float(signal_level / snr_linear)
+            elif snr is not None:
                 # SNR (dB) = 20 * log10(signal / noise)
-                signal_level = np.mean(np.abs(spectrum))
                 sigma = float(signal_level / (10**(snr / 20)))
             else:
-                sigma = float(0.01 * np.mean(np.abs(spectrum)))
+                sigma = float(0.01 * signal_level)
 
         noise = np.random.normal(0, sigma, len(spectrum))
         spectrum_noisy = spectrum + noise
@@ -661,11 +678,16 @@ def add_noise_to_spectrum(spectrum,
         spectrum_poisson = np.random.poisson(spectrum)
 
         if sigma is None:
-            if snr is not None:
-                signal_level = np.mean(np.abs(spectrum))
+            signal_level = np.mean(np.abs(spectrum))
+            if signal_level < 0.1:
+                signal_level = 1.0
+
+            if snr_linear is not None:
+                sigma = float(signal_level / snr_linear * 0.5)
+            elif snr is not None:
                 sigma = float(signal_level / (10**(snr / 20)) * 0.5)
             else:
-                sigma = float(0.005 * np.mean(np.abs(spectrum)))
+                sigma = float(0.005 * signal_level)
 
         noise = np.random.normal(0, sigma, len(spectrum))
         spectrum_noisy = spectrum_poisson + noise
@@ -679,6 +701,7 @@ def add_noise_to_spectrum(spectrum,
 def add_noise_to_results(results,
                          noise_type='gaussian',
                          snr=None,
+                         snr_linear=None,
                          sigma=None,
                          seed=None):
     """
@@ -692,6 +715,8 @@ def add_noise_to_results(results,
         噪声类型
     snr : float, optional
         信噪比（dB）
+    snr_linear : float, optional
+        线性信噪比
     sigma : float, optional
         标准差
     seed : int, optional
@@ -702,21 +727,48 @@ def add_noise_to_results(results,
     List
         加噪后的结果列表
     """
-    from core.tomography_result import ForwardModelResult
-
     noisy_results = []
 
     for result in results:
-        noisy_i = add_noise_to_spectrum(result.stokes_i, noise_type, snr,
-                                        sigma, seed)
-        noisy_v = add_noise_to_spectrum(result.stokes_v, noise_type, snr,
-                                        sigma, seed)
-        noisy_q = (add_noise_to_spectrum(result.stokes_q, noise_type, snr,
-                                         sigma, seed)
-                   if result.stokes_q is not None else None)
-        noisy_u = (add_noise_to_spectrum(result.stokes_u, noise_type, snr,
-                                         sigma, seed)
-                   if result.stokes_u is not None else None)
+        # 对 Stokes I 使用 snr_linear 计算 sigma
+        # 对 Stokes V/Q/U 使用相同的 sigma (通常噪声水平是一样的)
+
+        # 计算 sigma (如果未提供)
+        current_sigma = sigma
+        if current_sigma is None:
+            # 假设连续谱强度为 1.0
+            signal_ref = 1.0
+            if snr_linear is not None:
+                current_sigma = signal_ref / snr_linear
+            elif snr is not None:
+                current_sigma = signal_ref / (10**(snr / 20))
+            else:
+                current_sigma = 0.01  # Default S/N=100
+
+        noisy_i = add_noise_to_spectrum(result.stokes_i,
+                                        noise_type,
+                                        sigma=current_sigma,
+                                        seed=seed)
+
+        # 偏振分量使用相同的 sigma
+        noisy_v = add_noise_to_spectrum(result.stokes_v,
+                                        noise_type,
+                                        sigma=current_sigma,
+                                        seed=seed)
+
+        noisy_q = None
+        if result.stokes_q is not None:
+            noisy_q = add_noise_to_spectrum(result.stokes_q,
+                                            noise_type,
+                                            sigma=current_sigma,
+                                            seed=seed)
+
+        noisy_u = None
+        if result.stokes_u is not None:
+            noisy_u = add_noise_to_spectrum(result.stokes_u,
+                                            noise_type,
+                                            sigma=current_sigma,
+                                            seed=seed)
 
         noisy_result = ForwardModelResult(
             stokes_i=noisy_i,
@@ -724,7 +776,7 @@ def add_noise_to_results(results,
             stokes_q=noisy_q,
             stokes_u=noisy_u,
             wavelength=result.wavelength,
-            error=sigma if sigma is not None else None,
+            error=current_sigma,  # 记录噪声水平
             hjd=result.hjd,
             phase_index=result.phase_index,
             pol_channel=result.pol_channel,
@@ -770,8 +822,6 @@ def create_simple_spot_simulator(nr: int = 40,
     SpotSimulator
         simulator对象
     """
-    from core.grid_tom import diskGrid
-
     grid = diskGrid(nr=nr, r_in=r_in, r_out=r_out)
     sim = SpotSimulator(grid,
                         inclination_rad=np.deg2rad(inclination_deg),

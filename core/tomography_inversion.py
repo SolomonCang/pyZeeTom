@@ -14,25 +14,11 @@ import logging
 
 from core.tomography_config import InversionConfig
 from core.tomography_result import InversionResult, ForwardModelResult
-from core.mem_tomography import (
-    MEMTomographyAdapter,
-    MagneticFieldParams,
-    StokesObservation,
-)
-from core.mem_iteration_manager import (
-    IterationManager,
-    create_iteration_manager_from_config,
-)
+from core.mem_tomography import MEMTomographyAdapter
+from core.mem_iteration_manager import create_iteration_manager_from_config
+from core.disk_geometry_integrator import VelspaceDiskIntegrator
 
 logger = logging.getLogger(__name__)
-
-# 可选导入标记：VelspaceDiskIntegrator（用于解析导数）
-HAS_VELSPACE_INTEGRATOR = False
-try:
-    from core.disk_geometry_integrator import VelspaceDiskIntegrator  # noqa: F401
-    HAS_VELSPACE_INTEGRATOR = True
-except ImportError:
-    pass
 
 # ════════════════════════════════════════════════════════════════════════════
 # 参数编码/解码工具函数（用于 MEM 优化器）
@@ -82,37 +68,6 @@ def _unpack_magnetic_parameters(
     if len(params) != 3 * npix:
         raise ValueError(f"参数向量长度 {len(params)} 不能整除 3")
     return params[:npix], params[npix:2 * npix], params[2 * npix:]
-
-
-def _compute_response_matrix_stub(B_los: np.ndarray,
-                                  B_perp: np.ndarray,
-                                  chi: np.ndarray,
-                                  obs_data_vector: np.ndarray,
-                                  verbose: bool = False) -> np.ndarray:
-    """
-    计算响应矩阵（数值导数占位符）。
-    
-    这是一个占位符实现，使用数值导数来估计模型对参数的偏导数。
-    
-    参数：
-        B_los, B_perp, chi: 当前磁场参数
-        obs_data_vector: 观测数据向量 (Ndata,)
-        verbose: 是否打印调试信息
-    
-    返回：
-        响应矩阵 (Ndata, 3*Npix)
-    """
-    npix = len(B_los)
-    ndata = len(obs_data_vector)
-
-    # 初始化响应矩阵为小的随机值
-    # 真实实现会使用数值微分或解析导数
-    Resp = np.ones((ndata, 3 * npix)) * 0.01
-
-    if verbose:
-        logger.debug(f"响应矩阵初始化: 形状 {Resp.shape}, 值 ~0.01")
-
-    return Resp
 
 
 def _adaptive_delta(param_value: float, scale: float = 1e-3) -> float:
@@ -464,9 +419,6 @@ def _invert_single_phase(phase_idx: int,
     # 初始化积分器 (新增)
     # ════════════════════════════════════════════════════════════════════════════
 
-    if not HAS_VELSPACE_INTEGRATOR:
-        raise ImportError("VelspaceDiskIntegrator 未导入，无法进行物理驱动的反演")
-
     # 计算速度网格
     c_kms = 2.99792458e5
     v_grid = (obs_data.wl - config.lineData.wl0) / config.lineData.wl0 * c_kms
@@ -608,6 +560,8 @@ def _invert_single_phase(phase_idx: int,
             chi2=chi2,
             entropy=entropy,
             gradient_norm=None,
+            grad_S_norm=0.0,  # 熵梯度范数（暂未实现）
+            grad_C_norm=0.0,  # 约束梯度范数（暂未实现）
         )
 
         if verbose and iteration % max(1, max_iters // 10) == 0:
@@ -662,6 +616,7 @@ def _invert_single_phase(phase_idx: int,
         chi=chi,
         obs_spectrum=obs_data.specI,
         obs_error=obs_data.sigma,
+        integrator=integrator,
     )
 
     return result
@@ -996,6 +951,7 @@ def _compute_fit_quality(
     chi: np.ndarray,
     obs_spectrum: np.ndarray,
     obs_error: np.ndarray,
+    integrator: Any,
 ) -> Dict[str, float]:
     """计算拟合质量指标
     
@@ -1011,6 +967,8 @@ def _compute_fit_quality(
         观测频谱
     obs_error : np.ndarray
         观测误差
+    integrator : Any
+        积分器实例
     
     Returns
     -------
@@ -1018,9 +976,11 @@ def _compute_fit_quality(
         拟合质量指标字典
     """
 
+    # 计算合成频谱
+    integrator.compute_spectrum(B_los=B_los, B_perp=B_perp, chi=chi)
+    predicted = integrator.I
+
     # 计算 RMS 残差
-    # 这里使用占位符，实际需要合成频谱
-    predicted = np.ones_like(obs_spectrum)  # 占位符
     residuals = obs_spectrum - predicted
     rms_residual = float(np.sqrt(np.mean(residuals**2)))
     max_residual = float(np.max(np.abs(residuals)))

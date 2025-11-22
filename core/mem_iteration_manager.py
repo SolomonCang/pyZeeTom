@@ -14,8 +14,34 @@ from typing import Dict, Any, Optional, Tuple
 try:
     from core.mem_monitoring import ProgressMonitor, IterationHistory
 except ImportError:
-    ProgressMonitor = None
-    IterationHistory = None
+    # 定义哑类以避免 NoneType 错误
+    class ProgressMonitor:  # type: ignore
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def on_iteration_start(self):
+            pass
+
+        def on_iteration_complete(self, *args):
+            pass
+
+        def get_summary(self):
+            return {}
+
+    class IterationHistory:  # type: ignore
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def record_iteration(self, *args, **kwargs):
+            pass
+
+        def get_summary(self):
+            return {}
+
+        def get_history(self):
+            return {}
 
 
 class ConvergenceChecker:
@@ -188,11 +214,12 @@ class IterationManager:
         self,
         chi2: float,
         entropy: float,
-        grad_S_norm: float,
-        grad_C_norm: float,
+        grad_S_norm: float = 0.0,
+        grad_C_norm: float = 0.0,
         alpha: float = 0.0,
         param_delta: float = 0.0,
         diagnostics: Optional[Dict[str, Any]] = None,
+        gradient_norm: Optional[float] = None,
     ) -> None:
         """
         记录单次迭代的结果
@@ -205,10 +232,15 @@ class IterationManager:
           alpha: 步长（可选）
           param_delta: 参数变化幅度（可选）
           diagnostics: 诊断信息（可选）
+          gradient_norm: 兼容性参数（可选，若提供则用于 grad_C_norm）
         
         异常：
           ValueError: 任何数值为 NaN/Inf
         """
+        # 兼容性处理
+        if gradient_norm is not None and grad_C_norm == 0.0:
+            grad_C_norm = gradient_norm
+
         # 验证输入
         values = {
             'chi2': chi2,
@@ -352,12 +384,20 @@ def create_iteration_manager_from_config(
     返回：
       配置好的 IterationManager 实例
     """
-    max_iters = config.max_iterations or config.num_iterations
+    if isinstance(config, dict):
+        max_iters = config.get('max_iterations') or config.get(
+            'num_iterations', 100)
+        convergence_threshold = config.get('convergence_threshold', 1e-6)
+        stall_threshold = config.get('stall_threshold', 5)
+    else:
+        max_iters = getattr(config, 'max_iterations', None) or getattr(
+            config, 'num_iterations', 100)
+        convergence_threshold = getattr(config, 'convergence_threshold', 1e-6)
+        stall_threshold = getattr(config, 'stall_threshold', 5)
 
     config_dict = {
-        'convergence_threshold':
-        config.convergence_threshold
-        if hasattr(config, 'convergence_threshold') else 1e-6,
+        'convergence_threshold': convergence_threshold,
+        'stall_threshold': stall_threshold,
     }
 
     return IterationManager(
@@ -408,7 +448,7 @@ if __name__ == "__main__":
 
     # 获取总结
     summary = manager.get_summary()
-    print(f"\n=== 管理器总结 ===")
+    print("\n=== 管理器总结 ===")
     print(f"迭代完成数: {summary['iterations_completed']}")
     print(f"是否收敛: {summary['converged']}")
     print(f"收敛原因: {summary['convergence_reason']}")

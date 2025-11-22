@@ -30,68 +30,48 @@ from core.SpecIO import loadObsProfile, ObservationProfile
 # ==============================================================================
 CONFIG = {
     # --- 数据输入配置 ---
-    'params_file':
-    'input/params_tomog.txt',  # 参数文件路径
-    'model_dir':
-    'output/outModel',  # 光谱文件所在目录
+    'params_file': 'input/params_spot_forward.txt',  # 参数文件路径
+    'model_dir': 'output/spot_forward',  # 光谱文件所在目录
 
     # 指定文件列表 (可选)
     # None: 自动搜索 (phase001.lsd, .s, .spec 等)
-    'file_list': [
-        'output/spot_forward/simuspec/phase_0000_HJD0p500_VRp0p00_I.spec',
-        'output/spot_forward/simuspec/phase_0003_HJD1p250_VRp0p00_U.spec',
-        'output/spot_forward/simuspec/phase_0002_HJD1p000_VRp0p00_Q.spec',
-        'output/spot_forward/simuspec/phase_0001_HJD0p750_VRp0p00_V.spec'
-    ],
+    'file_list': None,
 
     # 选择显示的 Stokes 参数
     # 'I': 只画 I
     # 'V', 'Q', 'U': 画两张图，左边 I，右边 V/Q/U
-    'stokes':
-    'V',
-    'file_type':
-    'auto',  # 传给 SpecIO 的文件类型提示
+    'stokes': 'V',
+    'file_type': 'auto',  # 传给 SpecIO 的文件类型提示
 
     # --- 绘图模式配置 ---
     # 'image':   绘制动态谱（颜色图/热力图）
     # 'stacked': 绘制堆叠折线图（所有谱线画在一张图上，按相位错开）
-    'plot_mode':
-    'stacked',
+    'plot_mode': 'image',
 
     # --- 输出配置 ---
-    'out_file':
-    None,  # 输出路径 (如 'plot.png')，None 则弹窗
+    'out_file': None,  # 输出路径 (如 'plot.png')，None 则弹窗
 
     # --- 'image' 模式专用配置 ---
-    'cmap':
-    'RdBu_r',  # 颜色映射
-    'vmin':
-    0.98,  # Stokes I 的颜色下限
-    'vmax':
-    1.02,  # Stokes I 的颜色上限
+    'cmap': 'RdBu_r',  # 颜色映射
+    'vmin': 0.98,  # Stokes I 的颜色下限
+    'vmax': 1.02,  # Stokes I 的颜色上限
     # 偏振分量的颜色范围通常需要更小
-    'vmin_pol':
-    -0.001,
-    'vmax_pol':
-    0.001,
+    'vmin_pol': -0.001,
+    'vmax_pol': 0.001,
 
     # --- 'stacked' 模式专用配置 ---
     # 缩放系数：控制谱线起伏的高度。
     # Stokes I 公式: Y = Phase + (Intensity - 1.0) * stack_scale
     # Stokes P 公式: Y = Phase + Intensity * stack_scale * pol_scale_mult
-    'stack_scale':
-    10.0,
+    'stack_scale': 1.0,
     # 偏振分量的额外放大倍数 (V通常100, Q/U可能需要更大，如10000)
-    'pol_scale_mult':
-    10.0,
-    'line_color':
-    'black',  # 线条颜色
-    'line_width':
-    0.6,  # 线条宽度
+    'pol_scale_mult': 10.0,
+    'line_color': 'black',  # 线条颜色
+    'line_width': 0.6,  # 线条宽度
 
     # --- 数据处理配置 ---
-    'remove_baseline':
-    False,  # 是否去除基线 (减去平均谱)
+    'remove_baseline': False,  # 是否去除基线 (减去平均谱)
+    'align_continuum': True,  # 是否强制对齐连续谱 (将边缘对齐到 1.0)
 }
 # ==============================================================================
 
@@ -100,29 +80,35 @@ def find_file_for_index(base_dir, index):
     """自适应搜索对应索引的光谱文件。"""
     base_dir = Path(base_dir)
 
-    # 可能的前缀和数字格式组合
-    stems = [
-        f"phase{index:03d}",  # phase001
-        f"phase_{index:03d}",  # phase_001
-        f"spec{index:03d}",  # spec001
-        f"spec_{index:03d}",  # spec_001
-        f"{index:03d}",  # 001
-        f"phase{index}",  # phase1
-        f"spec{index}",  # spec1
+    # 定义可能的搜索模式 (glob patterns)
+    # 支持 3位或4位数字，支持文件名中有额外后缀
+    patterns = [
+        f"phase{index:03d}*",  # phase001...
+        f"phase_{index:03d}*",  # phase_001...
+        f"phase{index:04d}*",  # phase0001...
+        f"phase_{index:04d}*",  # phase_0001...
+        f"spec{index:03d}*",  # spec001...
+        f"spec_{index:03d}*",  # spec_001...
+        f"{index:03d}*",  # 001...
     ]
 
     # 可能的扩展名
-    extensions = ['.lsd', '.s', '.spec', '.dat', '.txt']
+    extensions = {'.lsd', '.s', '.spec', '.dat', '.txt'}
 
-    for stem in stems:
-        for ext in extensions:
-            candidate = base_dir / (stem + ext)
-            if candidate.exists():
-                return candidate
-            # 尝试大写后缀
-            candidate_upper = base_dir / (stem + ext.upper())
-            if candidate_upper.exists():
-                return candidate_upper
+    for pattern in patterns:
+        # 使用 glob 搜索匹配前缀的文件
+        candidates = list(base_dir.glob(pattern))
+
+        # 过滤有效扩展名
+        valid_candidates = [
+            c for c in candidates
+            if c.suffix.lower() in extensions and c.is_file()
+        ]
+
+        if valid_candidates:
+            # 如果找到，返回第一个（排序以保证确定性）
+            valid_candidates.sort()
+            return valid_candidates[0]
 
     return None
 
@@ -292,10 +278,23 @@ def main():
             intensities_Pol = [spec - mean_Pol
                                for spec in intensities_Pol]  # Pol 保持在 0.0 附近
 
+    # 连续谱对齐 (强制边缘为 1.0)
+    if CONFIG.get('align_continuum', False) and not remove_baseline:
+        print("Aligning continuum (shifting edges to 1.0)...")
+        # 计算每个谱的边缘均值 (取前5个和后5个点)
+        # 假设边缘是连续谱
+        new_I = []
+        for spec in intensities_I:
+            edge_val = (np.mean(spec[:5]) + np.mean(spec[-5:])) / 2.0
+            # Shift so edge is at 1.0
+            new_I.append(spec - edge_val + 1.0)
+        intensities_I = new_I
+
     # ==========================================================================
     # 绘图初始化
     # ==========================================================================
     # 如果是 I，一张图；如果是 V/Q/U，两张图 (1行2列)
+    # 恢复 sharey=True 以保证相位对齐
     if stokes_cfg == 'I':
         fig, ax_main = plt.subplots(figsize=(6, 10))
         axes = [ax_main]
@@ -353,6 +352,9 @@ def main():
             line_color = CONFIG['line_color']
             lw = CONFIG['line_width']
 
+            y_data_min = np.inf
+            y_data_max = -np.inf
+
             for i in range(len(times)):
                 phase = times[i]
                 x = xs_list[i]
@@ -367,14 +369,28 @@ def main():
                     pol_mult = CONFIG.get('pol_scale_mult', 100.0)
                     y_plot = phase + (y) * pol_mult * scale
 
+                # 更新数据范围
+                if len(y_plot) > 0:
+                    y_data_min = min(y_data_min, np.min(y_plot))
+                    y_data_max = max(y_data_max, np.max(y_plot))
+
                 ax.plot(x, y_plot, color=line_color, linewidth=lw, alpha=0.8)
 
             ax.set_title(f'Stacked (Stokes {label}, Scale={scale})')
 
-            # 设置 Y 轴范围
-            y_min = times[0] - 0.05
-            y_max = times[-1] + 0.05
-            ax.set_ylim(y_min, y_max)
+            # 动态设置 Y 轴范围
+            # 基础范围是相位范围
+            base_min = times[0] - 0.05
+            base_max = times[-1] + 0.05
+
+            # 结合数据范围 (防止数据超出视野)
+            if np.isfinite(y_data_min) and np.isfinite(y_data_max):
+                final_min = min(base_min, y_data_min - 0.05)
+                final_max = max(base_max, y_data_max + 0.05)
+            else:
+                final_min, final_max = base_min, base_max
+
+            ax.set_ylim(final_min, final_max)
             ax.set_xlim(x_sample[0], x_sample[-1])
 
         # 公共轴标签

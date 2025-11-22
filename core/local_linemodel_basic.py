@@ -68,10 +68,15 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
       d = (λ - λ0)/σ,  G = exp(-d^2)
 
     输出:
-      I = 1 + amp * G
-      V = Cg * Blos * (amp * G * d / σ)
-      Q = -C2 * Bperp^2 * (amp * (G/σ^2) * (1 - 2 d^2)) * cos(2χ)
-      U = -C2 * Bperp^2 * (amp * (G/σ^2) * (1 - 2 d^2)) * sin(2χ)
+      I = 1 + (amp - 1) * G
+      (amp > 1 为发射线, amp < 1 为吸收线)
+
+      V = C_V * Blos * (dI/dv)
+      其中 C_V = -4.6686e-12 * g * wl0 * c
+      dI/dv 为 Stokes I 对速度的微分
+
+      Q = -C2 * Bperp^2 * ((amp-1) * (G/σ^2) * (1 - 2 d^2)) * cos(2χ)
+      U = -C2 * Bperp^2 * ((amp-1) * (G/σ^2) * (1 - 2 d^2)) * sin(2χ)
 
     注意:
       - amp 可为标量或每像素值；若传 (Npix,) 将广播到 (1,Npix) 并与 (Nλ,Npix) 的 wl_grid 对齐。
@@ -84,8 +89,19 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
                  enable_V: bool = True,
                  enable_QU: bool = True):
         self.ld = line_data
-        # V 的比例常数（与常用途径一致）
-        self.Cg = -2.0 * 4.6686e-12 * (self.ld.wl0**2) * self.ld.g
+
+        # Ensure line data is valid to satisfy type checkers
+        if self.ld.wl0 is None or self.ld.g is None or self.ld.sigWl is None:
+            raise ValueError(
+                "LineData contains None values. Please check the input file.")
+
+        self.c_kms = 2.99792458e5  # speed of light in km/s
+
+        # V 的比例常数
+        # Coefficient for Stokes V: -4.6686e-12 * g * wl0 * c
+        # This coefficient is used with dI/dv
+        self.C_V_coeff = -4.6686e-12 * self.ld.g * self.ld.wl0 * self.c_kms
+
         # Q/U 的比例常数（弱场二阶）
         base = 4.6686e-12 * (self.ld.wl0**2) * self.ld.g
         self.C2 = (base**2) * float(k_QU)
@@ -138,13 +154,25 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
                 print(f"[LineModel] Blos max: {np.max(Blos):.4f}")
             self._debug_printed = True
 
+        # 计算高斯振幅 A
+        # amp 是中心强度: I_peak = amp
+        # I = 1 + A * G => I_peak = 1 + A => A = amp - 1
+        A = amp - 1.0
+
         # I（连续谱=1）
-        I = 1.0 + amp * G
+        I = 1.0 + A * G
 
         # V
+        # Stokes V = C_V * Blos * (dI/dv)
         if enable_V and (Blos is not None):
             Blos_arr = np.asarray(Blos, dtype=float).reshape(1, Npix)
-            V = self.Cg * Blos_arr * (amp * G * d / sig)
+
+            # dI/dlambda
+            dI_dlam = A * G * (-2.0 * d / sig)
+            # dI/dv = dI/dlambda * (lambda0 / c)
+            dI_dv = dI_dlam * (self.ld.wl0 / self.c_kms)
+
+            V = self.C_V_coeff * Blos_arr * dI_dv
         else:
             V = np.zeros((Nlam, Npix), dtype=float)
 
@@ -159,8 +187,9 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
                 cos2c = np.cos(2.0 * chi)
                 sin2c = np.sin(2.0 * chi)
                 Bperp2 = Bperp * Bperp
-                Q = -self.C2 * Bperp2 * (amp * d2_core) * cos2c
-                U = -self.C2 * Bperp2 * (amp * d2_core) * sin2c
+                # 使用 A (amp-1) 而不是 amp
+                Q = -self.C2 * Bperp2 * (A * d2_core) * cos2c
+                U = -self.C2 * Bperp2 * (A * d2_core) * sin2c
             else:
                 Q = np.zeros((Nlam, Npix), dtype=float)
                 U = np.zeros((Nlam, Npix), dtype=float)

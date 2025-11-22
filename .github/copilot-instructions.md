@@ -171,20 +171,21 @@ InversionConfig (配置容器)
        ▼
 run_mem_inversion() [tomography_inversion.py]
        │
+       ├─ MEMTomographyAdapter (初始化适配器)
+       ├─ VelspaceDiskIntegrator (初始化积分器)
        ├─ IterationManager (迭代控制)
        │
        ├─ FOR iteration:
-       │  ├─ FOR each pixel:
-       │  │  ├─ MEMTomographyAdapter.compute_synthetic()
-       │  │  ├─ MEMOptimizer.iterate()
-       │  │  │  ├─ 计算 χ² = Σ((S_syn - S_obs)²/σ²)
-       │  │  │  ├─ 最大化 Q = H - λ·χ²
-       │  │  │  └─ 更新 (Blos, Bperp, chi)
-       │  │  │
-       │  │  └─ 更新磁场
+       │  ├─ VelspaceDiskIntegrator.compute_spectrum() -> S_syn (合成光谱)
+       │  ├─ _compute_response_matrix() -> Resp (响应矩阵)
+       │  ├─ MEMTomographyAdapter.pack_image_vector() -> Image (参数向量)
        │  │
-       │  ├─ 收敛判定
-       │  └─ 中间保存 (可选)
+       │  ├─ MEMOptimizer.iterate(Image, S_syn, Data, Resp)
+       │  │  ├─ MEMTomographyAdapter.compute_entropy_callback() (计算熵 S, ∇S)
+       │  │  └─ MEMTomographyAdapter.compute_constraint_callback() (计算 χ², ∇χ²)
+       │  │
+       │  ├─ MEMTomographyAdapter.unpack_image_vector() -> (Blos, Bperp, chi)
+       │  └─ 收敛判定
        │
        ▼
 InversionResult
@@ -201,6 +202,18 @@ InversionResult
 ├── output/inversion_summary.txt
 └── output/inversion_intermediate_*.npz
 ```
+
+### MEM 适配层 (mem_tomography.py)
+
+`MEMTomographyAdapter` 类充当通用 MEM 优化器 (`mem_generic.py`) 与具体物理问题之间的桥梁：
+
+1.  **参数映射**: 将物理参数 (`MagneticFieldParams`, `BrightnessDisk`) 打包/解包为优化器的一维 `Image` 向量。
+2.  **熵定义**: 实现了针对不同物理量的熵函数：
+    *   **亮度/Bperp**: 标准正值熵 $S = - \sum w_i (x \ln(x/def) - x + def)$
+    *   **Blos**: 对称熵（允许正负值）
+    *   **chi**: 平滑性/周期性熵
+3.  **约束计算**: 计算 $\chi^2$ 及其梯度，并提供简单的缓存机制 (`_constraint_cache`) 加速重复计算。
+4.  **边界约束**: 强制执行物理约束（如亮度 > 0）。
 
 ---
 

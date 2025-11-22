@@ -288,7 +288,7 @@ class PhysicalModelBuilder:
         Parameters
         ----------
         nr : int, optional
-            环数（默认从 par.nRingsStellarGrid）
+            环数。如果未提供，将根据 r_out 自动调整以保持径向分辨率与 par 配置一致。
         r_in : float, optional
             内半径 (R_sun)，默认0.0
         r_out : float, optional
@@ -301,19 +301,44 @@ class PhysicalModelBuilder:
         diskGrid
             创建的网格对象
         """
-        nr = int(nr) if nr is not None else int(
-            getattr(self.par, 'nRingsStellarGrid', 60))
-        r_in = float(r_in) if r_in is not None else 0.0
-        r_out = float(r_out) if r_out is not None else float(
+        # 1. 确定几何边界
+        r_in_val = float(r_in) if r_in is not None else 0.0
+        r_out_val = float(r_out) if r_out is not None else float(
             getattr(self.par, 'r_out', 5.0))
 
-        if self.verbose:
-            print(f"[PhysicalModelBuilder] Creating grid: nr={nr}, "
-                  f"r ∈ [{r_in:.2f}, {r_out:.2f}] R_sun")
+        # 2. 确定环数 nr
+        if nr is not None:
+            nr_val = int(nr)
+        else:
+            # 自动调整逻辑：保持径向分辨率
+            par_nr = int(getattr(self.par, 'nRingsStellarGrid', 60))
+            par_r_out = float(getattr(self.par, 'r_out', 5.0))
 
-        self._grid = diskGrid(nr=nr,
-                              r_in=r_in,
-                              r_out=r_out,
+            # 如果 r_out 显著改变，则调整 nr 以保持 dr 不变
+            # 假设 par 配置是基于 r_in=0 的（通常情况）
+            if abs(r_out_val - par_r_out) > 1e-6 and par_r_out > 0:
+                # base_dr = par_r_out / par_nr
+                # new_nr = (r_out - r_in) / base_dr
+                base_dr = par_r_out / max(par_nr, 1)
+                nr_val = int(np.ceil((r_out_val - r_in_val) / base_dr))
+                # 确保至少有 1 个环
+                nr_val = max(1, nr_val)
+
+                if self.verbose:
+                    print(
+                        f"[PhysicalModelBuilder] Auto-adjusted nr={nr_val} "
+                        f"(base: nr={par_nr} @ r_out={par_r_out}) to maintain resolution"
+                    )
+            else:
+                nr_val = par_nr
+
+        if self.verbose:
+            print(f"[PhysicalModelBuilder] Creating grid: nr={nr_val}, "
+                  f"r ∈ [{r_in_val:.2f}, {r_out_val:.2f}] R_sun")
+
+        self._grid = diskGrid(nr=nr_val,
+                              r_in=r_in_val,
+                              r_out=r_out_val,
                               target_pixels_per_ring=target_pixels_per_ring,
                               verbose=self.verbose)
 
@@ -403,6 +428,34 @@ class PhysicalModelBuilder:
         if line_model is None:
             raise ValueError(
                 "line_model is required for VelspaceDiskIntegrator")
+
+        # 自动从 par 提取速度参数 (如果未在 kwargs 中提供)
+        if 'disk_v0_kms' not in integrator_kwargs:
+            # 计算赤道速度 v_eq = vsini / sin(i)
+            vsini = float(getattr(self.par, 'vsini', 10.0))
+            inc_deg = float(getattr(self.par, 'inclination', 60.0))
+            inc_rad = np.deg2rad(inc_deg)
+            # 避免除以零
+            if abs(np.sin(inc_rad)) > 1e-6:
+                v_eq = vsini / np.sin(inc_rad)
+            else:
+                v_eq = vsini  # Fallback for face-on (though vsini is 0 then)
+
+            integrator_kwargs['disk_v0_kms'] = v_eq
+            if self.verbose:
+                print(
+                    f"[PhysicalModelBuilder] Auto-set disk_v0_kms={v_eq:.2f} km/s "
+                    f"(from vsini={vsini}, i={inc_deg}°)")
+
+        if 'disk_power_index' not in integrator_kwargs:
+            integrator_kwargs['disk_power_index'] = float(
+                getattr(self.par, 'pOmega', 0))
+
+        if 'disk_r0' not in integrator_kwargs:
+            # 优先使用 r0_rot (如果存在于 par)，否则使用 radius
+            # 注意：readParamsTomog 通常将 radius 存储为 par.radius
+            integrator_kwargs['disk_r0'] = float(
+                getattr(self.par, 'radius', 1.0))
 
         # 生成默认速度网格（如果未提供）
         if v_grid is None:
