@@ -1,0 +1,49 @@
+#0 inclination vsini period pOmega
+60.0 40.0 1.0 -0.05
+
+#1 mass radius Vmax r_out enable_occultation
+1.0 0.8 150 2.5 1
+
+#2 nRings
+10
+
+#3 targetForm targetValue numIterations
+C 1.3 15
+
+#4 test_aim
+0.1
+
+#5 lineAmpConst k_QU enableV enableQU
+1.0 1.0 1 0
+
+#6 initTomogFile modelPath
+0 dummy
+
+#7 fitBri fitMag fitBlos fitBperp fitChi
+1 1 1 1 1
+
+#8 spectralResolution lineParamFile
+65000 input/lines.txt
+
+#9 velStart velEnd
+-400 400
+
+#10 jDateRef
+2450000.0
+
+# Files
+input/inSpec/phase_0000_HJD2450000p000_VRp0p00_V.spec 2450000.000 0.0
+input/inSpec/phase_0001_HJD2450000p050_VRp0p00_V.spec 2450000.050 0.0
+input/inSpec/phase_0002_HJD2450000p120_VRp0p00_V.spec 2450000.120 0.0
+input/inSpec/phase_0003_HJD2450000p180_VRp0p00_V.spec 2450000.180 0.0
+input/inSpec/phase_0004_HJD2450000p250_VRp0p00_V.spec 2450000.250 0.0
+input/inSpec/phase_0005_HJD2450000p330_VRp0p00_V.spec 2450000.330 0.0
+input/inSpec/phase_0006_HJD2450000p410_VRp0p00_V.spec 2450000.410 0.0
+input/inSpec/phase_0007_HJD2450000p480_VRp0p00_V.spec 2450000.480 0.0
+input/inSpec/phase_0008_HJD2450000p550_VRp0p00_V.spec 2450000.550 0.0
+input/inSpec/phase_0009_HJD2450000p650_VRp0p00_V.spec 2450000.650 0.0
+input/inSpec/phase_0010_HJD2450000p720_VRp0p00_V.spec 2450000.720 0.0
+input/inSpec/phase_0011_HJD2450000p800_VRp0p00_V.spec 2450000.800 0.0
+input/inSpec/phase_0012_HJD2450000p880_VRp0p00_V.spec 2450000.880 0.0
+input/inSpec/phase_0013_HJD2450000p920_VRp0p00_V.spec 2450000.920 0.0
+input/inSpec/phase_0014_HJD2450000p980_VRp0p00_V.spec 2450000.980 0.0

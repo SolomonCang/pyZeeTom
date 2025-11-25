@@ -1,12 +1,12 @@
 """
-tomography_result.py - 正演和反演工作流的结果对象
+tomography_result.py - Result Objects for Forward and Inversion Workflows
 
-本模块提供结构化的结果容器，取代函数返回的元组。
-提供：
-  - 类型安全的数据访问
-  - 内置的统计和诊断方法
-  - 方便的序列化/导出功能
-  - 清晰的文档和 IDE 自动补全
+This module provides structured result containers, replacing tuples returned by functions.
+Provides:
+  - Type-safe data access
+  - Built-in statistical and diagnostic methods
+  - Convenient serialization/export functions
+  - Clear documentation and IDE autocompletion
 """
 
 from dataclasses import dataclass, field
@@ -17,148 +17,155 @@ from datetime import datetime
 
 @dataclass
 class ForwardModelResult:
-    """正演模型结果容器
+    """Forward Model Result Container
     
-    存储单相位正演工作流的输出结果。
+    Stores output results of single-phase forward workflow.
     
     Attributes
     ----------
     stokes_i : np.ndarray
-        Stokes I 分量光谱 (形状: Nλ)
+        Stokes I component spectrum (shape: Nλ)
     stokes_v : np.ndarray
-        Stokes V 分量光谱 (形状: Nλ)
+        Stokes V component spectrum (shape: Nλ)
     stokes_q : Optional[np.ndarray]
-        Stokes Q 分量光谱 (形状: Nλ)，可选
+        Stokes Q component spectrum (shape: Nλ), optional
     stokes_u : Optional[np.ndarray]
-        Stokes U 分量光谱 (形状: Nλ)，可选
+        Stokes U component spectrum (shape: Nλ), optional
     wavelength : np.ndarray
-        波长网格 (形状: Nλ)
+        Wavelength grid (shape: Nλ)
     error : Optional[np.ndarray]
-        观测误差 (形状: Nλ)
+        Observation error (shape: Nλ)
     """
 
-    # ============ 核心结果 ============
+    # ============ Core Results ============
 
     stokes_i: np.ndarray
-    """Stokes I 光谱数组 (Nλ,)"""
+    """Stokes I spectrum array (Nλ,)"""
 
     stokes_v: np.ndarray
-    """Stokes V 光谱数组 (Nλ,)"""
+    """Stokes V spectrum array (Nλ,)"""
 
     stokes_q: Optional[np.ndarray] = None
-    """Stokes Q 光谱数组 (Nλ,)，可选"""
+    """Stokes Q spectrum array (Nλ,), optional"""
 
     stokes_u: Optional[np.ndarray] = None
-    """Stokes U 光谱数组 (Nλ,)，可选"""
+    """Stokes U spectrum array (Nλ,), optional"""
 
     wavelength: np.ndarray = field(default_factory=lambda: np.array([]))
-    """波长网格 (Nλ,)"""
+    """Wavelength grid (Nλ,)"""
 
     error: Optional[np.ndarray] = None
-    """观测误差 (Nλ,)"""
+    """Observation error (Nλ,)"""
 
-    # ============ 元数据 ============
+    # ============ Metadata ============
 
     hjd: Optional[float] = None
-    """儒略日 (HJD)"""
+    """Heliocentric Julian Date (HJD)"""
 
     phase_index: int = 0
-    """观测相位索引"""
+    """Observation phase index"""
 
     pol_channel: str = "V"
-    """偏振通道标签 (仅支持: 'I', 'V', 'Q', 'U')"""
+    """Polarization channel label (only supports: 'I', 'V', 'Q', 'U')"""
 
     model_name: str = "forward_synthesis"
-    """模型名称"""
+    """Model name"""
 
-    # ============ 内部状态 ============
+    # ============ Internal State ============
 
     integrator: Any = field(default=None, repr=False, compare=False)
-    """关联的积分器对象 (VelspaceDiskIntegrator)"""
+    """Associated integrator object (VelspaceDiskIntegrator)"""
 
     _creation_time: str = field(
         default_factory=lambda: datetime.now().isoformat(),
         init=False,
         repr=False)
-    """创建时间"""
+    """Creation time"""
 
     def validate(self) -> None:
-        """验证结果数据完整性和一致性
+        """Validate result data integrity and consistency
         
         Raises
         ------
         ValueError
-            数据不一致或不完整
+            Data inconsistent or incomplete
         """
         if self.stokes_i is None or len(self.stokes_i) == 0:
-            raise ValueError("Stokes I 不能为空")
+            raise ValueError("Stokes I cannot be empty")
 
         if self.stokes_v is None or len(self.stokes_v) == 0:
-            raise ValueError("Stokes V 不能为空")
+            raise ValueError("Stokes V cannot be empty")
 
         nl = len(self.stokes_i)
 
         if len(self.stokes_v) != nl:
             raise ValueError(
-                f"Stokes V 长度 ({len(self.stokes_v)}) 与 I 不匹配 ({nl})")
+                f"Stokes V length ({len(self.stokes_v)}) does not match I ({nl})"
+            )
 
         if self.stokes_q is not None and len(self.stokes_q) != nl:
             raise ValueError(
-                f"Stokes Q 长度 ({len(self.stokes_q)}) 与 I 不匹配 ({nl})")
+                f"Stokes Q length ({len(self.stokes_q)}) does not match I ({nl})"
+            )
 
         if self.stokes_u is not None and len(self.stokes_u) != nl:
             raise ValueError(
-                f"Stokes U 长度 ({len(self.stokes_u)}) 与 I 不匹配 ({nl})")
+                f"Stokes U length ({len(self.stokes_u)}) does not match I ({nl})"
+            )
 
         if len(self.wavelength) > 0 and len(self.wavelength) != nl:
-            raise ValueError(f"波长长度 ({len(self.wavelength)}) 与光谱不匹配 ({nl})")
+            raise ValueError(
+                f"Wavelength length ({len(self.wavelength)}) does not match spectrum ({nl})"
+            )
 
         if self.error is not None and len(self.error) != nl:
-            raise ValueError(f"误差长度 ({len(self.error)}) 与光谱不匹配 ({nl})")
+            raise ValueError(
+                f"Error length ({len(self.error)}) does not match spectrum ({nl})"
+            )
 
     def get_chi2(self,
                  obs_spectrum: np.ndarray,
                  obs_spectrum_other: Optional[np.ndarray] = None,
                  obs_error: Optional[np.ndarray] = None,
                  obs_error_other: Optional[np.ndarray] = None) -> float:
-        """计算与观测数据的 χ² 值
+        """Calculate Chi^2 value with observation data
         
-        根据 pol_channel 计算对应 Stokes 分量的 χ²。
+        Calculate Chi^2 for corresponding Stokes component based on pol_channel.
         
         Parameters
         ----------
         obs_spectrum : np.ndarray
-            观测 Stokes I 光谱 (Nλ,)
+            Observed Stokes I spectrum (Nλ,)
         obs_spectrum_other : Optional[np.ndarray]
-            观测 Stokes V/Q/U 光谱 (Nλ,)，仅当 pol_channel != 'I' 时使用
+            Observed Stokes V/Q/U spectrum (Nλ,), used only when pol_channel != 'I'
         obs_error : Optional[np.ndarray]
-            Stokes I 观测误差 (Nλ,)，默认为结果中的 error
+            Stokes I observation error (Nλ,), defaults to error in result
         obs_error_other : Optional[np.ndarray]
-            Stokes V/Q/U 观测误差 (Nλ,)
+            Stokes V/Q/U observation error (Nλ,)
         
         Returns
         -------
         float
-            χ² 值 = Σ((obs - model) / σ)²
+            Chi^2 value = Σ((obs - model) / σ)²
             
         Notes
         -----
-        - pol_channel='I': 仅计算 Stokes I 的 χ²
-        - pol_channel='V'/'Q'/'U': 计算对应分量的 χ²（不包括 I）
+        - pol_channel='I': Calculate Chi^2 for Stokes I only
+        - pol_channel='V'/'Q'/'U': Calculate Chi^2 for corresponding component (excluding I)
         """
         self.validate()
 
         if obs_spectrum is None or len(obs_spectrum) != len(self.stokes_i):
-            raise ValueError("观测光谱维度不匹配")
+            raise ValueError("Observation spectrum dimension mismatch")
 
         pol_ch = self.pol_channel.upper()
 
-        # 验证 pol_channel 值
+        # Validate pol_channel value
         if pol_ch not in ('I', 'V', 'Q', 'U'):
             raise ValueError(
-                f"pol_channel 必须为 'I', 'V', 'Q' 或 'U'，收到 '{pol_ch}'")
+                f"pol_channel must be 'I', 'V', 'Q' or 'U', got '{pol_ch}'")
 
-        # Stokes I 通道
+        # Stokes I channel
         if pol_ch == 'I':
             sigma_i = obs_error if obs_error is not None else self.error
             if sigma_i is None or np.all(sigma_i == 0):
@@ -167,12 +174,14 @@ class ForwardModelResult:
                 residuals = ((obs_spectrum - self.stokes_i) / sigma_i)**2
             return float(np.sum(residuals))
 
-        # Stokes V 通道
+        # Stokes V channel
         if pol_ch == 'V':
             if obs_spectrum_other is None:
-                raise ValueError("pol_channel='V' 时必须提供 obs_spectrum_other")
+                raise ValueError(
+                    "obs_spectrum_other must be provided when pol_channel='V'")
             if len(obs_spectrum_other) != len(self.stokes_v):
-                raise ValueError("Stokes V 观测光谱维度不匹配")
+                raise ValueError(
+                    "Stokes V observation spectrum dimension mismatch")
             sigma_v = obs_error_other if obs_error_other is not None else (
                 self.error if self.error is not None else
                 np.ones_like(self.stokes_v) * 1e-5)
@@ -182,14 +191,16 @@ class ForwardModelResult:
                 residuals = ((obs_spectrum_other - self.stokes_v) / sigma_v)**2
             return float(np.sum(residuals))
 
-        # Stokes Q 通道
+        # Stokes Q channel
         if pol_ch == 'Q':
             if obs_spectrum_other is None:
-                raise ValueError("pol_channel='Q' 时必须提供 obs_spectrum_other")
+                raise ValueError(
+                    "obs_spectrum_other must be provided when pol_channel='Q'")
             if self.stokes_q is None:
-                raise ValueError("模型中不存在 Stokes Q")
+                raise ValueError("Stokes Q does not exist in model")
             if len(obs_spectrum_other) != len(self.stokes_q):
-                raise ValueError("Stokes Q 观测光谱维度不匹配")
+                raise ValueError(
+                    "Stokes Q observation spectrum dimension mismatch")
             sigma_q = obs_error_other if obs_error_other is not None else (
                 self.error if self.error is not None else
                 np.ones_like(self.stokes_q) * 1e-5)
@@ -199,14 +210,16 @@ class ForwardModelResult:
                 residuals = ((obs_spectrum_other - self.stokes_q) / sigma_q)**2
             return float(np.sum(residuals))
 
-        # Stokes U 通道
+        # Stokes U channel
         if pol_ch == 'U':
             if obs_spectrum_other is None:
-                raise ValueError("pol_channel='U' 时必须提供 obs_spectrum_other")
+                raise ValueError(
+                    "obs_spectrum_other must be provided when pol_channel='U'")
             if self.stokes_u is None:
-                raise ValueError("模型中不存在 Stokes U")
+                raise ValueError("Stokes U does not exist in the model")
             if len(obs_spectrum_other) != len(self.stokes_u):
-                raise ValueError("Stokes U 观测光谱维度不匹配")
+                raise ValueError(
+                    "Stokes U observation spectrum dimension mismatch")
             sigma_u = obs_error_other if obs_error_other is not None else (
                 self.error if self.error is not None else
                 np.ones_like(self.stokes_u) * 1e-5)
@@ -216,93 +229,100 @@ class ForwardModelResult:
                 residuals = ((obs_spectrum_other - self.stokes_u) / sigma_u)**2
             return float(np.sum(residuals))
 
-        # 这行代码不应该被执行（已在前面验证 pol_ch 值）
-        raise ValueError(f"无效的 pol_channel 值：{pol_ch}")
+        # This line should not be reached (pol_ch value already validated)
+        raise ValueError(f"Invalid pol_channel value: {pol_ch}")
 
     def get_relative_residuals(
             self,
             obs_spectrum: np.ndarray,
             obs_spectrum_other: Optional[np.ndarray] = None) -> np.ndarray:
-        """计算相对残差
+        """Calculate relative residuals
         
-        根据 pol_channel 计算对应 Stokes 分量的相对残差。
+        Calculate relative residuals for the corresponding Stokes component based on pol_channel.
         
         Parameters
         ----------
         obs_spectrum : np.ndarray
-            观测 Stokes I 光谱
+            Observed Stokes I spectrum
         obs_spectrum_other : Optional[np.ndarray]
-            观测 Stokes V/Q/U 光谱，仅当 pol_channel != 'I' 时使用
+            Observed Stokes V/Q/U spectrum, used only when pol_channel != 'I'
         
         Returns
         -------
         np.ndarray
-            相对残差数组 = (obs - model) / obs
+            Relative residuals array = (obs - model) / obs
             
         Notes
         -----
-        - pol_channel='I': 计算 Stokes I 残差
-        - pol_channel='V'/'Q'/'U': 计算对应分量的残差（不包括 I）
+        - pol_channel='I': Calculate Stokes I residuals
+        - pol_channel='V'/'Q'/'U': Calculate residuals for corresponding component (excluding I)
         """
         self.validate()
 
         pol_ch = self.pol_channel.upper()
 
-        # 验证 pol_channel 值
+        # Validate pol_channel value
         if pol_ch not in ('I', 'V', 'Q', 'U'):
             raise ValueError(
-                f"pol_channel 必须为 'I', 'V', 'Q' 或 'U'，收到 '{pol_ch}'")
+                f"pol_channel must be 'I', 'V', 'Q' or 'U', received '{pol_ch}'"
+            )
 
-        # Stokes I 通道
+        # Stokes I channel
         if pol_ch == 'I':
             safe_obs = np.where(
                 np.abs(obs_spectrum) > 1e-10, obs_spectrum, 1e-10)
             return (obs_spectrum - self.stokes_i) / safe_obs
 
-        # Stokes V 通道
+        # Stokes V channel
         if pol_ch == 'V':
             if obs_spectrum_other is None:
-                raise ValueError("pol_channel='V' 时必须提供 obs_spectrum_other")
+                raise ValueError(
+                    "obs_spectrum_other must be provided when pol_channel='V'")
             if len(obs_spectrum_other) != len(self.stokes_v):
-                raise ValueError("Stokes V 观测光谱维度不匹配")
+                raise ValueError(
+                    "Stokes V observation spectrum dimension mismatch")
             safe_obs = np.where(
                 np.abs(obs_spectrum_other) > 1e-10, obs_spectrum_other, 1e-10)
             return (obs_spectrum_other - self.stokes_v) / safe_obs
 
-        # Stokes Q 通道
+        # Stokes Q channel
         if pol_ch == 'Q':
             if obs_spectrum_other is None:
-                raise ValueError("pol_channel='Q' 时必须提供 obs_spectrum_other")
+                raise ValueError(
+                    "obs_spectrum_other must be provided when pol_channel='Q'")
             if self.stokes_q is None:
-                raise ValueError("模型中不存在 Stokes Q")
+                raise ValueError("Stokes Q does not exist in the model")
             if len(obs_spectrum_other) != len(self.stokes_q):
-                raise ValueError("Stokes Q 观测光谱维度不匹配")
+                raise ValueError(
+                    "Stokes Q observation spectrum dimension mismatch")
             safe_obs = np.where(
                 np.abs(obs_spectrum_other) > 1e-10, obs_spectrum_other, 1e-10)
             return (obs_spectrum_other - self.stokes_q) / safe_obs
 
-        # Stokes U 通道
+        # Stokes U channel
         if pol_ch == 'U':
             if obs_spectrum_other is None:
-                raise ValueError("pol_channel='U' 时必须提供 obs_spectrum_other")
+                raise ValueError(
+                    "obs_spectrum_other must be provided when pol_channel='U'")
             if self.stokes_u is None:
-                raise ValueError("模型中不存在 Stokes U")
+                raise ValueError("Stokes U does not exist in the model")
             if len(obs_spectrum_other) != len(self.stokes_u):
-                raise ValueError("Stokes U 观测光谱维度不匹配")
+                raise ValueError(
+                    "Stokes U observation spectrum dimension mismatch")
             safe_obs = np.where(
                 np.abs(obs_spectrum_other) > 1e-10, obs_spectrum_other, 1e-10)
             return (obs_spectrum_other - self.stokes_u) / safe_obs
 
-        # 这行代码不应该被执行（已在前面验证 pol_ch 值）
-        raise ValueError(f"无效的 pol_channel 值：{pol_ch}")
+        # This line should not be reached (pol_ch value already validated)
+        raise ValueError(f"Invalid pol_channel value: {pol_ch}")
 
     def get_spectrum_stats(self) -> Dict[str, Any]:
-        """获取光谱统计信息
+        """Get spectrum statistics
         
         Returns
         -------
         dict
-            包含各分量统计的字典
+            Dictionary containing statistics for each component
         """
         self.validate()
 
@@ -344,12 +364,12 @@ class ForwardModelResult:
         return stats
 
     def to_dict(self) -> Dict[str, Any]:
-        """序列化结果为字典（用于保存）
+        """Serialize result to dictionary (for saving)
         
         Returns
         -------
         dict
-            结果字典
+            Result dictionary
         """
         self.validate()
 
@@ -368,33 +388,33 @@ class ForwardModelResult:
                       par: Optional[Any] = None,
                       obsSet: Optional[List[Any]] = None,
                       verbose: int = 1) -> str:
-        """将合成光谱保存到文件
+        """Save synthetic spectrum to file
         
-        调用 mainFuncs.save_model_spectra_to_outModelSpec 以保证正确的输出格式
-        和 pol_channel 参数传递。
+        Calls mainFuncs.save_model_spectra_to_outModelSpec to ensure correct output format
+        and pol_channel parameter passing.
         
         Parameters
         ----------
         output_path : str
-            输出文件路径或目录
+            Output file path or directory
         par : Optional[readParamsTomog]
-            参数对象，如果为 None 将使用结果中的元数据
+            Parameter object, uses metadata in result if None
         obsSet : Optional[List[ObservationProfile]]
-            观测数据对象列表，如果为 None 将使用默认格式
+            Observation data object list, uses default format if None
         verbose : int
-            详细程度 (0=静默, 1=正常, 2=详细)
+            Verbosity level (0=silent, 1=normal, 2=detailed)
         
         Returns
         -------
         str
-            生成的输出文件路径
+            Generated output file path
         """
         from pathlib import Path
         import core.mainFuncs as mf
 
         self.validate()
 
-        # 构造临时 par 对象（如果未提供）
+        # Construct temporary par object (if not provided)
         if par is None:
             from types import SimpleNamespace
             par = SimpleNamespace()
@@ -404,10 +424,10 @@ class ForwardModelResult:
             par.polChannels = np.array([self.pol_channel])
             par.phases = np.array([self.phase_index])
 
-        # 构造临时 obsSet（如果未提供）
+        # Construct temporary obsSet (if not provided)
         if obsSet is None:
             from core.SpecIO import ObservationProfile
-            # 创建临时观测对象，用于推断格式
+            # Create temporary observation object to infer format
             obsSet = [
                 ObservationProfile(wl=self.wavelength,
                                    specI=self.stokes_i,
@@ -418,13 +438,13 @@ class ForwardModelResult:
                                    pol_channel=self.pol_channel)
             ]
 
-        # 组织结果为列表（格式：(v_grid, specI, specV, specQ, specU, pol_channel)）
-        # 注意：wavelength 作为 x 轴（可能是波长或速度）
+        # Organize results as list (format: (v_grid, specI, specV, specQ, specU, pol_channel))
+        # Note: wavelength as x-axis (can be wavelength or velocity)
         result_tuple = (self.wavelength, self.stokes_i, self.stokes_v,
                         self.stokes_q, self.stokes_u, self.pol_channel)
         results = [result_tuple]
 
-        # 调用 mainFuncs.save_model_spectra_to_outModelSpec
+        # Call mainFuncs.save_model_spectra_to_outModelSpec
         output_files = mf.save_model_spectra_to_outModelSpec(
             par,
             results,
@@ -435,45 +455,45 @@ class ForwardModelResult:
         if output_files:
             return output_files[0]
         else:
-            raise ValueError("保存失败：未能生成输出文件")
+            raise ValueError("Save failed: Failed to generate output file")
 
     def save_geomodel(self,
                       output_dir: str = './output',
                       integrator=None,
                       meta: Optional[Dict[str, Any]] = None,
                       verbose: int = 1) -> str:
-        """将几何模型保存到文件（geomodel.tomog 格式）
+        """Save geometric model to file (geomodel.tomog format)
         
-        调用 VelspaceDiskIntegrator.write_geomodel() 以保存当前的几何和物理模型。
+        Calls VelspaceDiskIntegrator.write_geomodel() to save current geometry and physical model.
         
         Parameters
         ----------
         output_dir : str
-            输出目录路径
+            Output directory path
         integrator : VelspaceDiskIntegrator, optional
-            积分器对象，包含几何模型信息。如果为 None，将尝试从结果中获取
+            Integrator object containing geometric model info. If None, tries to get from result
         meta : Optional[Dict[str, Any]]
-            额外的元数据（如观测信息），将包含在文件头中
+            Additional metadata (e.g. observation info) to include in file header
         verbose : int
-            详细程度 (0=静默, 1=正常, 2=详细)
+            Verbosity level (0=silent, 1=normal, 2=detailed)
             
         Returns
         -------
         str
-            生成的输出文件路径
+            Generated output file path
             
         Raises
         ------
         ValueError
-            如果没有提供 integrator 且无法从结果中获取
+            If integrator is not provided and cannot be retrieved from result
             
         Notes
         -----
-        geomodel.tomog 文件包含以下信息：
-        - 速度场参数（disk_v0_kms, disk_power_index 等）
-        - 几何参数（倾角、差速旋转指数等）
-        - 网格定义（径向层数、网格边界等）
-        - 每个像素的物理量（磁场、区域权重、振幅等）
+        geomodel.tomog file contains:
+        - Velocity field parameters (disk_v0_kms, disk_power_index etc.)
+        - Geometric parameters (inclination, differential rotation index etc.)
+        - Grid definition (radial layers, grid boundaries etc.)
+        - Physical quantities per pixel (magnetic field, area weight, amplitude etc.)
         """
         from pathlib import Path
 
@@ -482,23 +502,23 @@ class ForwardModelResult:
 
         if integrator is None:
             raise ValueError(
-                "必须提供 integrator 参数以保存几何模型。"
-                "integrator 应该是从 ForwardModelResult 生成时使用的 VelspaceDiskIntegrator 实例。"
+                "integrator parameter must be provided to save geometric model."
+                "integrator should be the VelspaceDiskIntegrator instance used when generating ForwardModelResult."
             )
 
-        # 确保输出目录存在
+        # Ensure output directory exists
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # 构造输出文件名
+        # Construct output filename
         filename = f"geomodel_phase_{self.phase_index:02d}.tomog"
         filepath = output_path / filename
 
-        # 构造元数据
+        # Construct metadata
         if meta is None:
             meta = {}
 
-        # 添加来自 ForwardModelResult 的信息
+        # Add info from ForwardModelResult
         meta.update({
             'phase_index': self.phase_index,
             'hjd': self.hjd,
@@ -508,21 +528,24 @@ class ForwardModelResult:
         })
 
         if verbose:
-            print(f"[save_geomodel] 保存几何模型到: {filepath}")
-            print(f"[save_geomodel] 相位索引: {self.phase_index}")
+            print(f"[save_geomodel] Saving geometric model to: {filepath}")
+            print(f"[save_geomodel] Phase index: {self.phase_index}")
             print(f"[save_geomodel] HJD: {self.hjd}")
 
         try:
-            # 调用 integrator 的 write_geomodel 方法
+            # Call integrator's write_geomodel method
             integrator.write_geomodel(str(filepath), meta=meta)
 
             if verbose:
-                print(f"[save_geomodel] ✓ 几何模型保存成功: {filepath}")
+                print(
+                    f"[save_geomodel] ✓ Geometric model saved successfully: {filepath}"
+                )
 
             return str(filepath)
 
         except Exception as e:
-            raise ValueError(f"保存几何模型失败: {type(e).__name__}: {e}")
+            raise ValueError(
+                f"Failed to save geometric model: {type(e).__name__}: {e}")
 
     def save_model_data(self,
                         output_dir: str = './output',
@@ -530,30 +553,30 @@ class ForwardModelResult:
                         par=None,
                         obsSet=None,
                         verbose: int = 1) -> Dict[str, str]:
-        """一次性保存所有模型数据（光谱 + 几何模型）
+        """Save all model data at once (spectrum + geometric model)
         
-        方便的包装方法，同时保存合成光谱和几何模型文件。
+        Convenience wrapper method to save both synthetic spectrum and geometric model file.
         
         Parameters
         ----------
         output_dir : str
-            输出目录路径
+            Output directory path
         integrator : VelspaceDiskIntegrator, optional
-            积分器对象（用于保存几何模型）
+            Integrator object (for saving geometric model)
         par : Optional[readParamsTomog]
-            参数对象（用于保存光谱）
+            Parameter object (for saving spectrum)
         obsSet : Optional[List[ObservationProfile]]
-            观测数据集（用于保存光谱）
+            Observation dataset (for saving spectrum)
         verbose : int
-            详细程度
+            Verbosity level
             
         Returns
         -------
         dict
-            包含生成的文件路径的字典：
+            Dictionary containing generated file paths:
             {
-                'spectrum': '...',  # 光谱文件
-                'geomodel': '...',  # 几何模型文件（如果提供 integrator）
+                'spectrum': '...',  # Spectrum file
+                'geomodel': '...',  # Geometric model file (if integrator provided)
             }
             
         Examples
@@ -564,15 +587,15 @@ class ForwardModelResult:
         ...     integrator=phys_model.integrator,
         ...     verbose=1
         ... )
-        >>> print(f"光谱保存到: {files['spectrum']}")
-        >>> print(f"几何模型保存到: {files['geomodel']}")
+        >>> print(f"Spectrum saved to: {files['spectrum']}")
+        >>> print(f"Geometric model saved to: {files['geomodel']}")
         """
         output_files = {}
 
         if verbose:
-            print(f"[save_model_data] 保存模型数据到: {output_dir}")
+            print(f"[save_model_data] Saving model data to: {output_dir}")
 
-        # 保存光谱
+        # Save spectrum
         try:
             spectrum_file = self.save_spectrum(output_dir,
                                                par=par,
@@ -581,10 +604,10 @@ class ForwardModelResult:
             output_files['spectrum'] = spectrum_file
         except Exception as e:
             if verbose:
-                print(f"[save_model_data] ⚠️  光谱保存失败: {e}")
+                print(f"[save_model_data] ⚠️  Spectrum save failed: {e}")
             output_files['spectrum'] = None
 
-        # 保存几何模型（如果提供 integrator）
+        # Save geometric model (if integrator provided)
         if integrator is not None:
             try:
                 geomodel_file = self.save_geomodel(output_dir=output_dir,
@@ -593,11 +616,13 @@ class ForwardModelResult:
                 output_files['geomodel'] = geomodel_file
             except Exception as e:
                 if verbose:
-                    print(f"[save_model_data] ⚠️  几何模型保存失败: {e}")
+                    print(
+                        f"[save_model_data] ⚠️  Geometric model save failed: {e}"
+                    )
                 output_files['geomodel'] = None
 
         if verbose:
-            print("[save_model_data] ✓ 模型数据保存完成")
+            print("[save_model_data] ✓ Model data save completed")
             for key, path in output_files.items():
                 if path:
                     print(f"  - {key}: {path}")
@@ -605,57 +630,57 @@ class ForwardModelResult:
         return output_files
 
     def create_summary(self) -> str:
-        """生成结果摘要字符串
+        """Generate result summary string
         
         Returns
         -------
         str
-            格式化的结果摘要
+            Formatted result summary
         """
         self.validate()
         stats = self.get_spectrum_stats()
 
         lines = [
             "=" * 70,
-            f"正演结果摘要 (相位 {self.phase_index}, HJD={self.hjd})",
+            f"Forward Result Summary (Phase {self.phase_index}, HJD={self.hjd})",
             "=" * 70,
-            f"模型: {self.model_name}",
-            f"偏振通道: {self.pol_channel}",
-            f"光谱点数: {len(self.stokes_i)}",
+            f"Model: {self.model_name}",
+            f"Pol Channel: {self.pol_channel}",
+            f"Spectrum Points: {len(self.stokes_i)}",
         ]
 
         if stats['wavelength_range']:
             lines.append(
-                f"波长范围: {stats['wavelength_range'][0]:.4f} - {stats['wavelength_range'][1]:.4f} nm"
+                f"Wavelength Range: {stats['wavelength_range'][0]:.4f} - {stats['wavelength_range'][1]:.4f} nm"
             )
 
         lines.extend([
             "",
-            "Stokes I 统计:",
-            f"  范围: [{stats['stokes_i']['min']:.6f}, {stats['stokes_i']['max']:.6f}]",
-            f"  均值: {stats['stokes_i']['mean']:.6f}",
-            f"  标准差: {stats['stokes_i']['std']:.6f}",
+            "Stokes I Stats:",
+            f"  Range: [{stats['stokes_i']['min']:.6f}, {stats['stokes_i']['max']:.6f}]",
+            f"  Mean: {stats['stokes_i']['mean']:.6f}",
+            f"  Std: {stats['stokes_i']['std']:.6f}",
             "",
-            "Stokes V 统计:",
-            f"  范围: [{stats['stokes_v']['min']:.6f}, {stats['stokes_v']['max']:.6f}]",
-            f"  振幅: {stats['stokes_v']['amplitude']:.6f}",
-            f"  均值: {stats['stokes_v']['mean']:.6f}",
+            "Stokes V Stats:",
+            f"  Range: [{stats['stokes_v']['min']:.6f}, {stats['stokes_v']['max']:.6f}]",
+            f"  Amplitude: {stats['stokes_v']['amplitude']:.6f}",
+            f"  Mean: {stats['stokes_v']['mean']:.6f}",
         ])
 
         if 'stokes_q' in stats:
             lines.extend([
                 "",
-                "Stokes Q 统计:",
-                f"  范围: [{stats['stokes_q']['min']:.6f}, {stats['stokes_q']['max']:.6f}]",
-                f"  均值: {stats['stokes_q']['mean']:.6f}",
+                "Stokes Q Stats:",
+                f"  Range: [{stats['stokes_q']['min']:.6f}, {stats['stokes_q']['max']:.6f}]",
+                f"  Mean: {stats['stokes_q']['mean']:.6f}",
             ])
 
         if 'stokes_u' in stats:
             lines.extend([
                 "",
-                "Stokes U 统计:",
-                f"  范围: [{stats['stokes_u']['min']:.6f}, {stats['stokes_u']['max']:.6f}]",
-                f"  均值: {stats['stokes_u']['mean']:.6f}",
+                "Stokes U Stats:",
+                f"  Range: [{stats['stokes_u']['min']:.6f}, {stats['stokes_u']['max']:.6f}]",
+                f"  Mean: {stats['stokes_u']['mean']:.6f}",
             ])
 
         lines.append("=" * 70)
@@ -665,120 +690,125 @@ class ForwardModelResult:
 
 @dataclass
 class InversionResult:
-    """MEM 反演结果容器
+    """MEM Inversion Result Container
     
-    存储 MEM 反演工作流的输出结果，包括多次迭代的演化信息。
+    Stores the output of the MEM inversion workflow, including evolution information over iterations.
     """
 
-    # ============ 最终磁场解 ============
+    # ============ Final Magnetic Field Solution ============
 
     B_los_final: np.ndarray
-    """最终视向磁场 (Npix,)"""
+    """Final line-of-sight magnetic field (Npix,)"""
 
     B_perp_final: np.ndarray
-    """最终垂直磁场 (Npix,)"""
+    """Final perpendicular magnetic field (Npix,)"""
 
     chi_final: np.ndarray
-    """最终磁场方向角 (Npix,)"""
+    """Final magnetic field azimuth angle (Npix,)"""
 
-    # ============ 迭代追踪 ============
+    brightness_final: Optional[np.ndarray] = None
+    """Final brightness distribution (Npix,), optional"""
+
+    # ============ Iteration Tracking ============
 
     iterations_completed: int = 0
-    """已完成的迭代次数"""
+    """Number of iterations completed"""
 
     chi2_history: List[float] = field(default_factory=list)
-    """χ² 值随迭代变化"""
+    """Chi-squared value history"""
 
     entropy_history: List[float] = field(default_factory=list)
-    """熵值随迭代变化"""
+    """Entropy value history"""
 
     regularization_history: List[float] = field(default_factory=list)
-    """正则化项随迭代变化"""
+    """Regularization term history"""
 
-    # ============ 收敛信息 ============
+    # ============ Convergence Info ============
 
     converged: bool = False
-    """是否收敛"""
+    """Whether converged"""
 
     convergence_reason: str = ""
-    """收敛原因描述"""
+    """Reason for convergence"""
 
     final_chi2: float = 0.0
-    """最终 χ² 值"""
+    """Final chi-squared value"""
 
     final_entropy: float = 0.0
-    """最终熵值"""
+    """Final entropy value"""
 
-    # ============ 统计信息 ============
+    # ============ Statistics ============
 
     magnetic_field_stats: Optional[Dict[str, Any]] = None
-    """磁场统计信息"""
+    """Magnetic field statistics"""
 
     fit_quality: Dict[str, float] = field(default_factory=dict)
-    """拟合质量指标 (例: 'rms_residual', 'max_residual' 等)"""
+    """Fit quality metrics (e.g. 'rms_residual', 'max_residual' etc.)"""
 
-    # ============ 元数据 ============
+    # ============ Metadata ============
 
     phase_index: int = 0
-    """相位索引"""
+    """Phase index"""
 
     pol_channels: List[str] = field(default_factory=lambda: ["I+V"])
-    """处理的偏振通道列表"""
+    """List of processed polarization channels"""
 
-    # ============ 内部状态 ============
+    # ============ Internal State ============
 
     _creation_time: str = field(
         default_factory=lambda: datetime.now().isoformat(),
         init=False,
         repr=False)
-    """创建时间"""
+    """Creation time"""
 
     def validate(self) -> None:
-        """验证结果数据完整性
+        """Validate result data integrity
         
         Raises
         ------
         ValueError
-            数据不一致或不完整
+            Data inconsistent or incomplete
         """
         if self.B_los_final is None or len(self.B_los_final) == 0:
-            raise ValueError("B_los_final 不能为空")
+            raise ValueError("B_los_final cannot be empty")
 
         npix = len(self.B_los_final)
 
         if len(self.B_perp_final) != npix:
             raise ValueError(
-                f"B_perp_final 长度 ({len(self.B_perp_final)}) 与 B_los 不匹配 ({npix})"
+                f"B_perp_final length ({len(self.B_perp_final)}) mismatch with B_los ({npix})"
             )
 
         if len(self.chi_final) != npix:
             raise ValueError(
-                f"chi_final 长度 ({len(self.chi_final)}) 与 B_los 不匹配 ({npix})")
+                f"chi_final length ({len(self.chi_final)}) mismatch with B_los ({npix})"
+            )
 
         if self.iterations_completed < 0:
-            raise ValueError(f"迭代次数不能为负: {self.iterations_completed}")
+            raise ValueError(
+                f"Iterations cannot be negative: {self.iterations_completed}")
 
-        # 仅当迭代数 > 0 且存在历史记录时检查一致性
+        # Check consistency only if iterations > 0 and history exists
         if self.iterations_completed > 0:
             if len(self.chi2_history) > 0 and len(
                     self.chi2_history) != self.iterations_completed:
                 raise ValueError(
-                    f"χ² 历史长度 ({len(self.chi2_history)}) 与迭代次数不匹配 ({self.iterations_completed})"
+                    f"Chi2 history length ({len(self.chi2_history)}) mismatch with iterations ({self.iterations_completed})"
                 )
 
     def get_convergence_rate(self) -> Optional[float]:
-        """计算收敛速率
+        """Calculate convergence rate
         
         Returns
         -------
         Optional[float]
-            相邻迭代间 χ² 相对变化的平均值，若历史不足则返回 None
+            Mean relative change of chi-squared between adjacent iterations, None if history insufficient
         """
         if len(self.chi2_history) < 2:
             return None
 
         chi2_array = np.array(self.chi2_history)
-        # 避免除零
+        # Avoid division by zero
         denom = np.where(
             np.abs(chi2_array[:-1]) > 1e-10, chi2_array[:-1], 1e-10)
         changes = np.abs(np.diff(chi2_array) / denom)
@@ -786,16 +816,16 @@ class InversionResult:
         return float(np.mean(changes))
 
     def get_magnetic_field_stats(self) -> Dict[str, Any]:
-        """计算磁场统计信息
+        """Calculate magnetic field statistics
         
         Returns
         -------
         dict
-            包含 B_los、B_perp 和 χ 的统计信息
+            Statistics for B_los, B_perp and chi
         """
         self.validate()
 
-        # 计算垂直磁场大小
+        # Calculate perpendicular magnetic field magnitude
         B_mag = np.sqrt(self.B_perp_final**2)
 
         stats = {
@@ -831,12 +861,12 @@ class InversionResult:
         return stats
 
     def get_optimization_metrics(self) -> Dict[str, float]:
-        """获取优化过程的关键指标
+        """Get key optimization metrics
         
         Returns
         -------
         dict
-            优化指标 (iterations, final_chi2, convergence_rate 等)
+            Optimization metrics (iterations, final_chi2, convergence_rate etc.)
         """
         self.validate()
 
@@ -848,18 +878,18 @@ class InversionResult:
             'convergence_rate': self.get_convergence_rate() or 0.0,
         }
 
-        # 添加拟合质量指标
+        # Add fit quality metrics
         metrics.update(self.fit_quality)
 
         return metrics
 
     def create_summary(self) -> str:
-        """生成反演结果摘要
+        """Generate inversion result summary
         
         Returns
         -------
         str
-            格式化的摘要字符串
+            Formatted summary string
         """
         self.validate()
 
@@ -868,27 +898,27 @@ class InversionResult:
 
         lines = [
             "=" * 70,
-            f"MEM 反演结果摘要 (相位 {self.phase_index})",
+            f"MEM Inversion Result Summary (Phase {self.phase_index})",
             "=" * 70,
             "",
-            "收敛状态:",
-            f"  已完成迭代: {self.iterations_completed}",
-            f"  是否收敛: {self.converged}",
-            f"  收敛原因: {self.convergence_reason}",
-            f"  收敛速率: {opt_metrics['convergence_rate']:.3e}",
+            "Convergence Status:",
+            f"  Iterations Completed: {self.iterations_completed}",
+            f"  Converged: {self.converged}",
+            f"  Reason: {self.convergence_reason}",
+            f"  Convergence Rate: {opt_metrics['convergence_rate']:.3e}",
             "",
-            "优化指标:",
-            f"  最终 χ²: {self.final_chi2:.6e}",
-            f"  最终熵: {self.final_entropy:.6e}",
+            "Optimization Metrics:",
+            f"  Final Chi2: {self.final_chi2:.6e}",
+            f"  Final Entropy: {self.final_entropy:.6e}",
             "",
-            "磁场统计:",
+            "Magnetic Field Stats:",
             f"  B_los: [{mag_stats['B_los']['min']:.1f}, {mag_stats['B_los']['max']:.1f}] G",
-            f"         均值 {mag_stats['B_los']['mean']:.1f}, RMS {mag_stats['B_los']['rms']:.1f}",
+            f"         Mean {mag_stats['B_los']['mean']:.1f}, RMS {mag_stats['B_los']['rms']:.1f}",
             f"  B_perp: [{mag_stats['B_perp']['min']:.1f}, {mag_stats['B_perp']['max']:.1f}] G",
-            f"          均值 {mag_stats['B_perp']['mean']:.1f}, RMS {mag_stats['B_perp']['rms']:.1f}",
+            f"          Mean {mag_stats['B_perp']['mean']:.1f}, RMS {mag_stats['B_perp']['rms']:.1f}",
             f"  B_mag: RMS {mag_stats['B_mag']['rms']:.1f} G",
             "",
-            "处理的偏振通道:",
+            "Processed Pol Channels:",
             f"  {', '.join(self.pol_channels)}",
             "=" * 70,
         ]

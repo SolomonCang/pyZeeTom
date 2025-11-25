@@ -1,61 +1,61 @@
-# pyZeeTom 项目架构详解
+# pyZeeTom Project Architecture
 
-**最后更新**: 2025-11-15  
-**版本**: Phase 2.5.4.1（重构完成）
-
----
-
-## 目录
-1. [项目概述](#项目概述)
-2. [核心架构设计](#核心架构设计)
-3. [模块详解](#模块详解)
-4. [数据流与工作流](#数据流与工作流)
-5. [物理模型](#物理模型)
-6. [扩展与集成](#扩展与集成)
+**Last Updated**: 2025-11-15
+**Version**: Phase 2.5.4.1 (Refactoring Complete)
 
 ---
 
-## 项目概述
-
-**pyZeeTom** 是一个用于反演和正演4个Stokes量（I, Q, U, V）偏振光谱的tomography工具。
-
-### 物理场景
-- **中心天体+星周物质**：存在一个中心天体，周围有星周物质（尘埃团、盘、行星、小天体等）以刚体或差速方式环绕运动
-- **相位观测**：观测者与中心天体处于同一惯性系，只能通过天体自转带来的不同"phase"观测不同视角
-- **多通道观测**：每一观测相位可获得Stokes I及VQU分量的偏振光谱
-- **工作模式**：当前主攻正演模型，后续将引入MEM等方法实现反演
-
-### 主要特性
-- ✓ 多种观测数据格式支持（LSD/spec/pol/I/V/Q/U）
-- ✓ 弱场高斯Zeeman线型与自定义谱线模型
-- ✓ 环状/盘面网格，支持刚体与差速运动
-- ✓ 速度空间积分，合成全局Stokes谱
-- ✓ 时间演化支持：差速转动导致的盘面结构变化
-- ✓ 相位计算：自动根据JD、JD0和周期计算观测相位
-- ✓ MEM反演：最大熵方法重建磁场分布
+## Table of Contents
+1. [Project Overview](#project-overview)
+2. [Core Architecture Design](#core-architecture-design)
+3. [Module Details](#module-details)
+4. [Data Flow and Workflow](#data-flow-and-workflow)
+5. [Physical Model](#physical-model)
+6. [Extension and Integration](#extension-and-integration)
 
 ---
 
-## 核心架构设计
+## Project Overview
 
-### 分层架构
+**pyZeeTom** is a tomography tool for the inversion and forward modeling of 4 Stokes parameters (I, Q, U, V) polarization spectra.
+
+### Physical Scenario
+- **Central Object + Circumstellar Matter**: A central object surrounded by circumstellar matter (dust clumps, disks, planets, small bodies, etc.) orbiting in rigid body or differential rotation.
+- **Phase Observation**: The observer and the central object are in the same inertial frame, observing different viewing angles only through the "phase" brought by the object's rotation.
+- **Multi-channel Observation**: Polarization spectra of Stokes I and VQU components can be obtained for each observation phase.
+- **Working Mode**: Currently focused on forward modeling, with MEM inversion methods to be introduced later.
+
+### Key Features
+- ✓ Support for multiple observation data formats (LSD/spec/pol/I/V/Q/U)
+- ✓ Weak-field Gaussian Zeeman line profile and custom line models
+- ✓ Annular/Disk grid, supporting rigid body and differential rotation
+- ✓ Velocity space integration, synthesizing global Stokes spectra
+- ✓ Time evolution support: Disk structure changes due to differential rotation
+- ✓ Phase calculation: Automatically calculate observation phase based on JD, JD0, and period
+- ✓ MEM Inversion: Maximum Entropy Method to reconstruct magnetic field distribution
+
+---
+
+## Core Architecture Design
+
+### Layered Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  用户接口层 (UI Layer)                           │
+│  User Interface Layer (UI Layer)                 │
 │  pyzeetom/tomography.py                         │
 │  - forward_tomography()                         │
 │  - inversion_tomography()                       │
 └────────────────┬────────────────────────────────┘
                  │
 ┌────────────────▼────────────────────────────────┐
-│  工作流执行引擎 (Workflow Layer)                  │
+│  Workflow Execution Engine (Workflow Layer)      │
 │  - tomography_forward.py                        │
 │  - tomography_inversion.py                      │
 └────────────────┬────────────────────────────────┘
                  │
 ┌────────────────▼────────────────────────────────┐
-│  配置与结果容器 (Config & Result Layer)          │
+│  Config & Result Container (Config & Result Layer)│
 │  - tomography_config.py (ForwardModelConfig,   │
 │                         InversionConfig)       │
 │  - tomography_result.py (ForwardModelResult,   │
@@ -63,36 +63,36 @@
 └────────────────┬────────────────────────────────┘
                  │
 ┌────────────────▼────────────────────────────────┐
-│  物理计算核心 (Physics & Integration Layer)      │
+│  Physics Calculation Core (Physics & Integration Layer)│
 │  - velspace_DiskIntegrator.py                  │
-│    (速度空间磁盘积分器)                         │
+│    (Velocity Space Disk Integrator)             │
 │  - local_linemodel_basic.py                    │
-│    (谱线模型)                                  │
+│    (Line Model)                                │
 │  - mem_tomography.py                           │
-│    (MEM适配层)                                 │
+│    (MEM Adapter)                               │
 └────────────────┬────────────────────────────────┘
                  │
 ┌────────────────▼────────────────────────────────┐
-│  基础工具库 (Utility Layer)                      │
-│  - grid_tom.py (网格生成与管理)                 │
-│  - disk_geometry.py (盘几何)                    │
-│  - SpecIO.py (光谱IO)                          │
-│  - mainFuncs.py (参数解析)                     │
-│  - mem_generic.py (通用MEM算法)                │
-│  - iteration_manager.py (反演迭代控制)         │
-│  - mem_optimization.py (MEM优化)              │
-│  - mem_monitoring.py (监控与日志)             │
+│  Basic Utility Library (Utility Layer)           │
+│  - grid_tom.py (Grid Generation & Management)   │
+│  - disk_geometry.py (Disk Geometry)             │
+│  - SpecIO.py (Spectrum IO)                      │
+│  - mainFuncs.py (Parameter Parsing)             │
+│  - mem_generic.py (Generic MEM Algorithm)       │
+│  - iteration_manager.py (Inversion Iteration Ctrl)│
+│  - mem_optimization.py (MEM Optimization)       │
+│  - mem_monitoring.py (Monitoring & Logging)     │
 └─────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 模块详解
+## Module Details
 
-### 1. 用户接口层
+### 1. User Interface Layer
 
-#### `pyzeetom/tomography.py` (235 行)
-主入口模块，提供两个核心API：
+#### `pyzeetom/tomography.py` (235 lines)
+Main entry module, providing two core APIs:
 
 ```python
 def forward_tomography(
@@ -101,7 +101,7 @@ def forward_tomography(
     output_dir: str = './output'
 ) -> List[ForwardModelResult]
 ```
-执行正演频谱合成，返回每相位的正演结果。
+Executes forward spectrum synthesis, returning forward results for each phase.
 
 ```python
 def inversion_tomography(
@@ -111,21 +111,21 @@ def inversion_tomography(
     output_dir: str = './output'
 ) -> InversionResult
 ```
-执行MEM反演工作流，返回重建的磁场分布。
+Executes MEM inversion workflow, returning the reconstructed magnetic field distribution.
 
-**关键点**：
-- 薄包装设计，委托给工作流引擎
-- 统一的参数处理和错误控制
-- 自动路径推导
+**Key Points**:
+- Thin wrapper design, delegating to the workflow engine
+- Unified parameter handling and error control
+- Automatic path deduction
 
 ---
 
-### 2. 工作流执行引擎
+### 2. Workflow Execution Engine
 
-#### `core/tomography_forward.py` (246 行)
-正演工作流主引擎。
+#### `core/tomography_forward.py` (246 lines)
+Forward workflow main engine.
 
-**核心函数**：
+**Core Function**:
 ```python
 def run_forward_synthesis(
     config: ForwardModelConfig,
@@ -133,24 +133,24 @@ def run_forward_synthesis(
 ) -> List[ForwardModelResult]
 ```
 
-**工作流步骤**：
-1. 验证配置完整性
-2. 创建磁盘积分器（VelspaceDiskIntegrator）
-3. 对每相位执行频谱合成
-4. 收集并返回结果
+**Workflow Steps**:
+1. Validate configuration integrity
+2. Create disk integrator (VelspaceDiskIntegrator)
+3. Perform spectrum synthesis for each phase
+4. Collect and return results
 
-**关键操作**：
-- 相位迭代
-- 速度空间积分
-- Stokes谱合成
-- 结果聚合
+**Key Operations**:
+- Phase iteration
+- Velocity space integration
+- Stokes spectrum synthesis
+- Result aggregation
 
 ---
 
-#### `core/tomography_inversion.py` (1026 行)
-MEM反演工作流主引擎。
+#### `core/tomography_inversion.py` (1026 lines)
+MEM inversion workflow main engine.
 
-**核心函数**：
+**Core Function**:
 ```python
 def run_mem_inversion(
     config: InversionConfig,
@@ -158,41 +158,41 @@ def run_mem_inversion(
 ) -> InversionResult
 ```
 
-**工作流步骤**：
-1. 初始化反演迭代管理器
-2. 对每个相位和每个像素执行MEM优化
-3. 监控收敛性
-4. 中间结果保存
-5. 返回最终反演结果
+**Workflow Steps**:
+1. Initialize inversion iteration manager
+2. Perform MEM optimization for each phase and each pixel
+3. Monitor convergence
+4. Save intermediate results
+5. Return final inversion result
 
-**关键组件**：
-- 参数编码/解码（磁场参数打包）
-- MEM优化器适配层
-- 迭代收敛控制
-- 结果聚合
+**Key Components**:
+- Parameter encoding/decoding (B-field parameter packing)
+- MEM optimizer adapter layer
+- Iteration convergence control
+- Result aggregation
 
 ---
 
-### 3. 配置与结果容器
+### 3. Config & Result Container
 
-#### `core/tomography_config.py` (621 行)
-统一的配置对象。
+#### `core/tomography_config.py` (621 lines)
+Unified configuration objects.
 
-**核心类**：
+**Core Classes**:
 
 ```python
 @dataclass
 class ForwardModelConfig:
-    """正演配置容器"""
-    par: Any                    # 参数对象
-    obsSet: List[Any]          # 观测数据集
-    lineData: BasicLineData     # 谱线参数
-    geom: SimpleDiskGeometry    # 盘几何
-    line_model: Any            # 谱线模型
-    velEq: float = 100.0       # 赤道速度 (km/s)
-    pOmega: float = 0.0        # 差速转动指数
-    radius: float = 1.0        # 中心半径
-    # ... 更多参数
+    """Forward configuration container"""
+    par: Any                    # Parameter object
+    obsSet: List[Any]          # Observation dataset
+    lineData: BasicLineData     # Line parameters
+    geom: SimpleDiskGeometry    # Disk geometry
+    line_model: Any            # Line model
+    velEq: float = 100.0       # Equatorial velocity (km/s)
+    pOmega: float = 0.0        # Differential rotation index
+    radius: float = 1.0        # Central radius
+    # ... more parameters
     
     def validate(self) -> bool
     def create_summary(self) -> str
@@ -203,31 +203,31 @@ class ForwardModelConfig:
 ```python
 @dataclass
 class InversionConfig:
-    """反演配置容器"""
+    """Inversion configuration container"""
     forward_config: ForwardModelConfig
     max_iterations: int = 100
     convergence_threshold: float = 1e-6
     entropy_regularization: float = 0.1
-    # ... 更多参数
+    # ... more parameters
     
     def validate(self) -> bool
 ```
 
-**优势**：
-- 类型安全与IDE自动补全
-- 内置验证逻辑
-- 清晰的参数文档
-- 便利的序列化/反序列化
+**Advantages**:
+- Type safety and IDE auto-completion
+- Built-in validation logic
+- Clear parameter documentation
+- Convenient serialization/deserialization
 
 ---
 
 #### `core/tomography_result.py` (16 KB)
-统一的结果容器。
+Unified result container.
 
 ```python
 @dataclass
 class ForwardModelResult:
-    """正演结果"""
+    """Forward result"""
     phase_index: int
     stokes_i: np.ndarray
     stokes_v: np.ndarray
@@ -243,7 +243,7 @@ class ForwardModelResult:
 ```python
 @dataclass
 class InversionResult:
-    """反演结果"""
+    """Inversion result"""
     forward_results: List[ForwardModelResult]
     B_los: np.ndarray
     B_perp: np.ndarray
@@ -257,21 +257,21 @@ class InversionResult:
 
 ---
 
-### 4. 物理计算核心
+### 4. Physics Calculation Core
 
-#### `core/velspace_DiskIntegrator.py` (702 行)
-速度空间磁盘积分器 - 核心物理模块。
+#### `core/velspace_DiskIntegrator.py` (702 lines)
+Velocity space disk integrator - Core physics module.
 
-**核心类**：
+**Core Class**:
 ```python
 class VelspaceDiskIntegrator:
-    """盘模型速度空间积分器
+    """Disk model velocity space integrator
     
-    功能：
-    - 盘网格的速度映射
-    - 局部Stokes谱生成
-    - 速度空间积分合成
-    - 多相位处理
+    Functions:
+    - Disk grid velocity mapping
+    - Local Stokes spectrum generation
+    - Velocity space integration synthesis
+    - Multi-phase processing
     """
     
     def __init__(self, grid, line_model, verbose=False)
@@ -283,66 +283,66 @@ class VelspaceDiskIntegrator:
         Bperp: np.ndarray,
         chi: np.ndarray
     ) -> dict
-        # 返回: {'I': I_spec, 'V': V_spec, 'Q': Q_spec, 'U': U_spec}
+        # Returns: {'I': I_spec, 'V': V_spec, 'Q': Q_spec, 'U': U_spec}
     
     def derivative_Blos(self, ...) -> np.ndarray
-        # Stokes参数对Blos的导数
+        # Derivative of Stokes parameters w.r.t. Blos
     
     def derivative_Bperp_chi(self, ...) -> Tuple[np.ndarray, np.ndarray]
-        # Stokes参数对Bperp和chi的导数
+        # Derivative of Stokes parameters w.r.t. Bperp and chi
 ```
 
-**关键算法**：
-1. **盘速度场建模**：
-   - 外侧：幂律Ω(r) = Ω₀(r/r₀)^p
-   - 内侧：自适应减速序列
+**Key Algorithms**:
+1. **Disk Velocity Field Modeling**:
+   - Outer: Power-law Ω(r) = Ω₀(r/r₀)^p
+   - Inner: Adaptive deceleration sequence
 
-2. **局部谱线计算**：
-   - 使用注入的谱线模型（line_model）
-   - 支持I/V/Q/U多通道
+2. **Local Line Calculation**:
+   - Uses injected line model (line_model)
+   - Supports I/V/Q/U multi-channels
 
-3. **速度空间积分**：
-   - 盘网格像素求和
-   - 卷积平滑（FWHM调宽）
-   - 速度到观测频率映射
+3. **Velocity Space Integration**:
+   - Disk grid pixel summation
+   - Convolution smoothing (FWHM broadening)
+   - Velocity to observation frequency mapping
 
-4. **导数计算**：
-   - 自动计算Stokes参数对磁场参数的导数
-   - 支持反演优化
+4. **Derivative Calculation**:
+   - Automatic calculation of Stokes parameter derivatives w.r.t. magnetic field parameters
+   - Supports inversion optimization
 
 ---
 
-#### `core/local_linemodel_basic.py` (230 行)
-谱线模型 - 弱场近似。
+#### `core/local_linemodel_basic.py` (230 lines)
+Line model - Weak field approximation.
 
-**核心类**：
+**Core Classes**:
 ```python
 class LineData:
-    """谱线参数容器（从文件读取）"""
-    wl0: float      # 谱线中心波长
-    sigWl: float    # 谱线宽度
-    g: float        # Landé g因子
+    """Line parameter container (read from file)"""
+    wl0: float      # Line center wavelength
+    sigWl: float    # Line width
+    g: float        # Landé g factor
     
     def __init__(self, filename: str)
 ```
 
 ```python
 class GaussianZeemanWeakLineModel(BaseLineModel):
-    """弱场近似 + 高斯线型
+    """Weak field approximation + Gaussian profile
     
-    记: d = (λ - λ0)/σ, G = exp(-d²)
+    Let: d = (λ - λ0)/σ, G = exp(-d²)
     
-    输出:
+    Output:
       I = 1 + amp × G
       V = Cg × Blos × (amp × G × d / σ)
       Q = -C2 × Bperp² × (amp × (G/σ²) × (1 - 2d²)) × cos(2χ)
       U = -C2 × Bperp² × (amp × (G/σ²) × (1 - 2d²)) × sin(2χ)
     
-    参数:
-      - amp: 线项振幅（正=发射，负=吸收）
-      - Blos: 视向磁场 (km/s)
-      - Bperp: 垂直磁场
-      - chi: 磁场方位角（弧度）
+    Parameters:
+      - amp: Line amplitude (positive=emission, negative=absorption)
+      - Blos: Line-of-Sight magnetic field (km/s)
+      - Bperp: Perpendicular magnetic field
+      - chi: Magnetic field azimuth (radians)
     """
     
     def compute_local_profile(
@@ -354,62 +354,64 @@ class GaussianZeemanWeakLineModel(BaseLineModel):
     ) -> dict
 ```
 
-**扩展点**：继承`BaseLineModel`可实现自定义谱线模型。
+**Extension Point**: Inherit `BaseLineModel` to implement custom line models.
 
 ---
 
-#### `core/mem_tomography.py` (554 行)
-MEM反演适配层。
+#### `core/mem_tomography.py` (554 lines)
+MEM inversion adapter layer.
 
-**核心类**：
+**Core Class**:
 ```python
 class MEMTomographyAdapter:
-    """通用MEM算法与项目特定参数化的适配层
+    """Adapter layer between generic MEM algorithm and project-specific parameterization
     
-    功能：
-    - Stokes I, Q, U, V 谱线的拟合
-    - 磁场参数 (Blos, Bperp, chi) 的熵定义
-    - 数据打包/解包
-    - 响应矩阵构建
+    Functions:
+    - Fitting of Stokes I, Q, U, V lines
+    - Entropy definition for magnetic field parameters (Blos, Bperp, chi)
+    - Data packing/unpacking
+    - Response matrix construction
     """
     
     def __init__(self, config, grid, line_model, obs_data)
     
     def compute_synthetic(self, B_los, B_perp, chi) -> SyntheticSpectrum
-        # 合成Stokes谱
+        # Synthesize Stokes spectra
     
     def compute_gradients(self, B_los, B_perp, chi) -> dict
-        # 计算残差梯度（用于MEM优化）
+        # Compute residual gradients (for MEM optimization)
     
     def pack_parameters(self, B_los, B_perp, chi) -> np.ndarray
-        # 打包为优化向量
+        # Pack into optimization vector
     
     def unpack_parameters(self, x: np.ndarray) -> Tuple[np.ndarray, ...]
-        # 解包回物理参数
+        # Unpack back to physical parameters
 ```
 
-**集成点**：与`mem_generic.py`的通用MEM优化器集成。
+**Integration Point**: Integrates with the generic MEM optimizer in `mem_generic.py`.
 
 ---
 
-### 5. 基础工具库
+---
 
-#### `core/grid_tom.py` (358 行)
-网格生成与管理。
+### 5. Basic Utility Library
 
-**核心类**：
+#### `core/grid_tom.py` (358 lines)
+Grid generation and management.
+
+**Core Class**:
 ```python
 class diskGrid:
-    """等Δr分层盘网格（每环宽度一致）
+    """Equal Δr layered disk grid (consistent width per ring)
     
-    属性（一维数组存储）：
-    - r: 圆柱半径
-    - phi: 方位角
-    - dr: 径向像素宽度
-    - dphi: 角向像素宽度
-    - area: 像素面积
-    - ring_id: 环编号
-    - phi_id: 角向编号
+    Attributes (stored as 1D arrays):
+    - r: Cylindrical radius
+    - phi: Azimuth angle
+    - dr: Radial pixel width
+    - dphi: Angular pixel width
+    - area: Pixel area
+    - ring_id: Ring ID
+    - phi_id: Angular ID
     """
     
     def __init__(
@@ -422,39 +424,39 @@ class diskGrid:
     
     @property
     def numPoints(self) -> int
-        # 总像素数
+        # Total number of pixels
     
     def get_ring(self, ring_idx: int) -> dict
-        # 获取指定环的所有像素
+        # Get all pixels in a specific ring
 ```
 
-**设计亮点**：
-- 一维数组存储，支持向量化运算
-- 灵活的每环像素数控制
-- 自动计算等面积或等数量配置
+**Design Highlights**:
+- 1D array storage, supporting vectorized operations
+- Flexible control of pixels per ring
+- Automatic calculation of equal area or equal number configurations
 
 ---
 
 #### `core/disk_geometry.py` (7.8 KB)
-盘几何与动力学参数容器。
+Disk geometry and dynamics parameter container.
 
 ```python
 class SimpleDiskGeometry:
-    """盘几何与动力学参数
+    """Disk geometry and dynamics parameters
     
-    包含：
-    - diskGrid 实例
-    - 动力学参数 (velEq, pOmega, r0)
-    - 物理参数 (inclination, posang等)
+    Contains:
+    - diskGrid instance
+    - Dynamics parameters (velEq, pOmega, r0)
+    - Physical parameters (inclination, posang, etc.)
     """
 ```
 
 ---
 
-#### `core/SpecIO.py` (728 行)
-光谱数据读写（支持多格式）。
+#### `core/SpecIO.py` (728 lines)
+Spectrum data I/O (supports multiple formats).
 
-**核心函数**：
+**Core Functions**:
 ```python
 def obsProfSetInRange(
     fnames: List[str],
@@ -464,7 +466,7 @@ def obsProfSetInRange(
     file_type: str = 'auto',
     pol_channels: Optional[Dict] = None
 ) -> List[ObservationProfile]
-    # 读取观测数据集
+    # Read observation dataset
 ```
 
 ```python
@@ -477,10 +479,10 @@ def write_model_spectrum(
     spec_u: np.ndarray = None,
     file_type_hint: str = 'spec_i'
 )
-    # 写出模型谱
+    # Write model spectrum
 ```
 
-**支持格式**：
+**Supported Formats**:
 - `lsd_i`: LSD intensity-only format
 - `lsd_pol`: LSD full polarimetry (I,V,Q,U,σ)
 - `spec_i`: Simple spectrum (λ, I)
@@ -489,35 +491,35 @@ def write_model_spectrum(
 ---
 
 #### `core/mainFuncs.py` (37 KB)
-参数解析与兼容性层。
+Parameter parsing and compatibility layer.
 
 ```python
 def readParamsTomog(filename: str) -> ParamObject
-    """读取参数文件（向后兼容旧版格式）
+    """Read parameter file (backward compatible with old format)
     
-    返回包含所有配置参数的对象
+    Returns object containing all configuration parameters
     """
 
 def parseParamLine(s: str) -> Tuple[str, str]
-    """解析参数行"""
+    """Parse parameter line"""
 
-# ... 其他参数处理函数
+# ... other parameter handling functions
 ```
 
 ---
 
 #### `core/mem_generic.py` (17 KB)
-通用最大熵方法（MEM）算法。
+Generic Maximum Entropy Method (MEM) algorithm.
 
-**核心类**：
+**Core Class**:
 ```python
 class MEMOptimizer:
-    """通用MEM优化算法
+    """Generic MEM optimization algorithm
     
-    支持：
-    - 最大化熵约束下的极大似然法
-    - 自适应收敛控制
-    - Lagrange乘子管理
+    Supports:
+    - Maximum Likelihood under Maximum Entropy constraint
+    - Adaptive convergence control
+    - Lagrange multiplier management
     """
     
     def iterate(
@@ -530,25 +532,25 @@ class MEMOptimizer:
     ) -> Tuple[np.ndarray, float, dict]
 ```
 
-**设计原则**：
-- 完全项目无关的通用实现
-- 通过回调函数接受项目特定的物理模型
-- 易于与其他项目集成
+**Design Principles**:
+- Completely project-agnostic generic implementation
+- Accepts project-specific physical models via callback functions
+- Easy to integrate with other projects
 
 ---
 
 #### `core/iteration_manager.py` (13 KB)
-反演迭代控制与管理。
+Inversion iteration control and management.
 
 ```python
 class IterationManager:
-    """管理MEM迭代过程
+    """Manage MEM iteration process
     
-    功能：
-    - 迭代计数与收敛判定
-    - 中间结果保存
-    - 参数收敛曲线跟踪
-    - 自适应步长控制
+    Functions:
+    - Iteration counting and convergence check
+    - Intermediate result saving
+    - Parameter convergence curve tracking
+    - Adaptive step size control
     """
     
     def update(self, residual: float, entropy: float, params: np.ndarray)
@@ -559,49 +561,51 @@ class IterationManager:
 ---
 
 #### `core/mem_optimization.py` (19 KB)
-MEM优化加速与缓存。
+MEM optimization acceleration and caching.
 
-**核心类**：
+**Core Classes**:
 ```python
 class ResponseMatrixCache:
-    """响应矩阵缓存，避免重复计算"""
+    """Response matrix cache, avoiding repeated calculations"""
     
 class DataPipeline:
-    """数据流管理，优化内存使用"""
+    """Data flow management, optimizing memory usage"""
 ```
 
-**Week 2优化**：
-- 缓存响应矩阵（避免重复计算）
-- 流式处理观测数据
-- 自动内存管理
+**Week 2 Optimization**:
+- Cache response matrix (avoid repeated calculations)
+- Stream processing of observation data
+- Automatic memory management
 
 ---
 
 #### `core/mem_monitoring.py` (12 KB)
-反演监控与日志。
+Inversion monitoring and logging.
 
 ```python
 class MEMMonitor:
-    """监控MEM反演过程
+    """Monitor MEM inversion process
     
-    记录：
-    - 每次迭代的残差、熵、磁场
-    - 收敛历史
-    - 性能指标
+    Records:
+    - Residual, entropy, magnetic field for each iteration
+    - Convergence history
+    - Performance metrics
     """
 ```
 
 ---
 
-## 数据流与工作流
 
-### 正演工作流 (Forward Synthesis)
+
+## Data Flow and Workflow
+
+### Forward Workflow (Forward Synthesis)
 
 ```
-输入文件
-├── params_tomog.txt (参数)
-├── lines.txt (谱线参数)
-└── inSpec/*.lsd (观测数据)
+Input Files
+├── params_tomog.txt (Params)
+├── lines.txt (Line Params)
+└── inSpec/*.lsd (Obs Data)
        │
        ▼
 [pyzeetom/tomography.py::forward_tomography]
@@ -618,42 +622,42 @@ class MEMMonitor:
        ▼
 [ForwardModelConfig]
        │
-       ├─ SimpleDiskGeometry (盘几何)
-       │  └─ diskGrid + 动力学参数
+       ├─ SimpleDiskGeometry (Disk Geometry)
+       │  └─ diskGrid + Dynamics Params
        │
-       ├─ GaussianZeemanWeakLineModel (谱线模型)
+       ├─ GaussianZeemanWeakLineModel (Line Model)
        │
-       ├─ validate() (配置验证)
+       ├─ validate() (Config Validation)
        │
        ▼
 [tomography_forward.run_forward_synthesis]
        │
        ├─ FOR each phase in [phase_0, phase_1, ...]
        │  ├─ VelspaceDiskIntegrator.compute_spectrum_single_phase
-       │  │  ├─ 为每个网格像素计算速度和磁场投影
-       │  │  ├─ 调用 line_model.compute_local_profile
-       │  │  │  └─ 返回 {I, V, Q, U} (Nλ,)
-       │  │  ├─ 速度空间积分合成
-       │  │  └─ 返回合成谱 {I, V, Q, U}
+       │  │  ├─ Compute velocity and B-field projection for each grid pixel
+       │  │  ├─ Call line_model.compute_local_profile
+       │  │  │  └─ Return {I, V, Q, U} (Nλ,)
+       │  │  ├─ Velocity space integration synthesis
+       │  │  └─ Return synthetic spectra {I, V, Q, U}
        │  │
        │  └─ ForwardModelResult
        │     └─ {phase_index, stokes_i/v/q/u, wavelength, ...}
        │
        ▼
-输出文件
+Output Files
 ├── output/model_phase_0.lsd
 ├── output/model_phase_1.lsd
 └── output/outFitSummary.txt
 ```
 
-### 反演工作流 (MEM Inversion)
+### Inversion Workflow (MEM Inversion)
 
 ```
-正演结果 (ForwardModelResult)
+Forward Result (ForwardModelResult)
        │
-       ├─ Stokes谱 {I, V, Q, U}
-       ├─ 观测数据 {Iobs, Vobs, Qobs, Uobs}
-       ├─ 初始磁场猜测 {Blos_0, Bperp_0, chi_0}
+       ├─ Stokes Spectra {I, V, Q, U}
+       ├─ Obs Data {Iobs, Vobs, Qobs, Uobs}
+       ├─ Initial B-field Guess {Blos_0, Bperp_0, chi_0}
        │
        ▼
 [InversionConfig]
@@ -665,42 +669,42 @@ class MEMMonitor:
        ▼
 [tomography_inversion.run_mem_inversion]
        │
-       ├─ IterationManager (迭代控制)
+       ├─ IterationManager (Iteration Control)
        │
        ├─ FOR iteration = 0, 1, 2, ...
        │  ├─ FOR each pixel in diskGrid
        │  │  ├─ MEMTomographyAdapter.compute_synthetic
-       │  │  │  ├─ 调用 VelspaceDiskIntegrator.compute_spectrum
-       │  │  │  └─ 返回合成谱
+       │  │  │  ├─ Call VelspaceDiskIntegrator.compute_spectrum
+       │  │  │  └─ Return synthetic spectra
        │  │  │
-       │  │  ├─ MEMOptimizer.iterate (单步MEM优化)
-       │  │  │  ├─ 计算残差: χ² = Σ((S_syn - S_obs)²/σ²)
-       │  │  │  ├─ 计算熵: H = -Σ p_i log(p_i)
-       │  │  │  ├─ 最大化: Q = H - λ·χ²
-       │  │  │  ├─ 更新参数: Blos, Bperp, chi
-       │  │  │  └─ 返回 x_new, χ²_new, ...
+       │  │  ├─ MEMOptimizer.iterate (Single Step MEM Optimization)
+       │  │  │  ├─ Calc Residual: χ² = Σ((S_syn - S_obs)²/σ²)
+       │  │  │  ├─ Calc Entropy: H = -Σ p_i log(p_i)
+       │  │  │  ├─ Maximize: Q = H - λ·χ²
+       │  │  │  ├─ Update Params: Blos, Bperp, chi
+       │  │  │  └─ Return x_new, χ²_new, ...
        │  │  │
-       │  │  └─ 更新磁场 {Blos, Bperp, chi}
+       │  │  └─ Update B-field {Blos, Bperp, chi}
        │  │
-       │  ├─ IterationManager.update (收敛判定)
-       │  │  ├─ 检查 |Δχ²| < threshold
-       │  │  ├─ 检查最大迭代次数
-       │  │  └─ 保存中间结果
+       │  ├─ IterationManager.update (Convergence Check)
+       │  │  ├─ Check |Δχ²| < threshold
+       │  │  ├─ Check max iterations
+       │  │  └─ Save intermediate results
        │  │
-       │  └─ 中间结果保存 (可选)
+       │  └─ Intermediate Result Saving (Optional)
        │
        ▼
 [InversionResult]
        │
-       ├─ forward_results (正演结果)
-       ├─ B_los (最终视向磁场)
-       ├─ B_perp (最终垂直磁场)
-       ├─ chi (最终磁场方位角)
-       ├─ final_entropy (最终熵)
-       ├─ convergence_flag (是否收敛)
+       ├─ forward_results (Forward Results)
+       ├─ B_los (Final LOS B-field)
+       ├─ B_perp (Final Perp B-field)
+       ├─ chi (Final Azimuth)
+       ├─ final_entropy (Final Entropy)
+       ├─ convergence_flag (Converged?)
        │
        ▼
-输出文件
+Output Files
 ├── output/mem_inversion_result.npz
 ├── output/inversion_summary.txt
 └── output/inversion_intermediate_*.npz
@@ -708,166 +712,166 @@ class MEMMonitor:
 
 ---
 
-## 物理模型
+## Physical Model
 
-### 1. 盘速度场
+### 1. Disk Velocity Field
 
-**外侧** (r ≥ r₀)：幂律自转
+**Outer** (r ≥ r₀): Power-law rotation
 $$\Omega(r) = \Omega_0 \left(\frac{r}{r_0}\right)^p$$
 
-**内侧** (r < r₀)：自适应减速序列
-- 用余弦或其他光滑函数实现过渡
-- 避免物理奇点
+**Inner** (r < r₀): Adaptive deceleration sequence
+- Use cosine or other smooth functions for transition
+- Avoid physical singularities
 
-**线速度**：
+**Linear Velocity**:
 $$v_\phi(r) = r \cdot \Omega(r)$$
 
-### 2. 谱线模型（弱场近似）
+### 2. Line Model (Weak Field Approximation)
 
-设高斯谱线中心为λ₀，宽度为σ，无量纲偏差：
+Let Gaussian line center be λ₀, width be σ, dimensionless deviation:
 $$d = \frac{\lambda - \lambda_0}{\sigma}$$
 
-则高斯基：
+Then Gaussian basis:
 $$G(d) = \exp(-d^2)$$
 
-#### 强度 (Stokes I)
+#### Intensity (Stokes I)
 $$I(\lambda) = I_c + a \cdot G(d)$$
-其中 $I_c = 1$（连续谱）， $a$ 为振幅（正=发射，负=吸收）
+Where $I_c = 1$ (continuum), $a$ is amplitude (positive=emission, negative=absorption)
 
-#### 圆偏振 (Stokes V)
+#### Circular Polarization (Stokes V)
 $$V(\lambda) = C_g \cdot B_\text{los} \cdot a \cdot G(d) \cdot \frac{d}{\sigma}$$
-其中 $C_g$ 为Zeeman系数， $B_\text{los}$ 为视向磁场
+Where $C_g$ is Zeeman coefficient, $B_\text{los}$ is Line-of-Sight magnetic field
 
-#### 线性偏振 (Stokes Q, U)
+#### Linear Polarization (Stokes Q, U)
 $$Q(\lambda) = -C_2 \cdot B_\perp^2 \cdot a \cdot \frac{G(d)}{\sigma^2} \cdot (1 - 2d^2) \cdot \cos(2\chi)$$
 $$U(\lambda) = -C_2 \cdot B_\perp^2 \cdot a \cdot \frac{G(d)}{\sigma^2} \cdot (1 - 2d^2) \cdot \sin(2\chi)$$
 
-其中：
-- $B_\perp$ 为垂直平面磁场强度
-- $\chi$ 为磁场方位角（弧度）
-- $C_2$ 为二阶Zeeman系数
+Where:
+- $B_\perp$ is perpendicular plane magnetic field strength
+- $\chi$ is magnetic field azimuth (radians)
+- $C_2$ is second-order Zeeman coefficient
 
-### 3. 速度到观测频率映射
+### 3. Velocity to Observation Frequency Mapping
 
-多普勒偏移：
+Doppler Shift:
 $$v = c \frac{\lambda - \lambda_\text{ref}}{\lambda_\text{ref}}$$
 
-或频率空间：
+Or Frequency Space:
 $$\nu = \nu_0 \left(1 - \frac{v}{c}\right)$$
 
-### 4. 盘积分与求和
+### 4. Disk Integration and Summation
 
-每像素对观测谱的贡献：
+Contribution of each pixel to the observed spectrum:
 $$S_\text{obs}(\lambda) = \sum_i w_i \cdot S_\text{local}(i, \lambda)$$
 
-其中 $w_i$ 为像素权重（面积/可见性因子等）。
+Where $w_i$ is pixel weight (area/visibility factor, etc.).
 
 ---
 
-## 扩展与集成
+## Extension and Integration
 
-### 自定义谱线模型
+### Custom Line Model
 
-1. 继承 `BaseLineModel`
-2. 实现 `compute_local_profile()` 方法
-3. 返回 `{'I': ..., 'V': ..., 'Q': ..., 'U': ...}`
+1. Inherit `BaseLineModel`
+2. Implement `compute_local_profile()` method
+3. Return `{'I': ..., 'V': ..., 'Q': ..., 'U': ...}`
 
 ```python
 class MyCustomLineModel(BaseLineModel):
     def compute_local_profile(self, wl_grid, amp, **kwargs):
-        # 自定义计算逻辑
+        # Custom calculation logic
         return {'I': I, 'V': V, 'Q': Q, 'U': U}
 ```
 
-### 新观测格式支持
+### New Observation Format Support
 
-1. 在 `SpecIO.py` 中添加解析函数
-2. 返回 `ObservationProfile` 对象
-3. 集成到 `obsProfSetInRange()` 中
+1. Add parsing function in `SpecIO.py`
+2. Return `ObservationProfile` object
+3. Integrate into `obsProfSetInRange()`
 
-### 反演方法扩展
+### Inversion Method Extension
 
-1. 在 `core/` 下创建新模块（如 `tomography_mcmc.py`）
-2. 实现类似 `run_mem_inversion()` 的接口
-3. 使用现有的配置与结果容器
-4. 在主入口 (`pyzeetom/tomography.py`) 中暴露新接口
+1. Create new module under `core/` (e.g., `tomography_mcmc.py`)
+2. Implement interface similar to `run_mem_inversion()`
+3. Use existing config and result containers
+4. Expose new interface in main entry (`pyzeetom/tomography.py`)
 
 ---
 
-## 典型开发流程
+## Typical Development Workflow
 
-### 步骤1：问题诊断
-- 使用 `tomography_config.validate()` 检查参数
-- 查看 `tomography_result.create_summary()` 理解输出
+### Step 1: Problem Diagnosis
+- Use `tomography_config.validate()` to check parameters
+- View `tomography_result.create_summary()` to understand output
 
-### 步骤2：正演验证
+### Step 2: Forward Verification
 ```python
 from pyzeetom import tomography
 results = tomography.forward_tomography('input/params.txt', verbose=2)
 ```
 
-### 步骤3：反演调试
+### Step 3: Inversion Debugging
 ```python
 results = tomography.inversion_tomography('input/params.txt', verbose=2)
 ```
 
-### 步骤4：模型扩展
-- 修改 `disk_geometry.py` 添加新的几何模型
-- 继承 `BaseLineModel` 实现自定义谱线
-- 在 `tomography_config.py` 中配置参数
+### Step 4: Model Extension
+- Modify `disk_geometry.py` to add new geometry models
+- Inherit `BaseLineModel` to implement custom lines
+- Configure parameters in `tomography_config.py`
 
-### 步骤5：性能优化
-- 使用 `mem_optimization.py` 的缓存和流管理
-- 利用 `mem_monitoring.py` 跟踪性能指标
-- 根据 `iteration_manager.py` 调整收敛参数
+### Step 5: Performance Optimization
+- Use cache and stream management in `mem_optimization.py`
+- Track performance metrics with `mem_monitoring.py`
+- Adjust convergence parameters according to `iteration_manager.py`
 
 ---
 
-## 文件大小与复杂度概览
+## File Size and Complexity Overview
 
-| 模块 | 大小 | 主要责任 |
+| Module | Size | Main Responsibility |
 |-----|------|--------|
-| mainFuncs.py | 37 KB | 参数解析、兼容性 |
-| velspace_DiskIntegrator.py | 27 KB | 核心物理积分 |
-| SpecIO.py | 27 KB | 光谱IO |
-| tomography_inversion.py | 34 KB | MEM反演流程 |
-| tomography_config.py | 21 KB | 配置容器 |
-| mem_optimization.py | 19 KB | MEM优化加速 |
-| mem_tomography.py | 19 KB | MEM适配层 |
-| mem_generic.py | 17 KB | 通用MEM算法 |
-| tomography_result.py | 16 KB | 结果容器 |
-| grid_tom.py | 14 KB | 网格生成 |
-| iteration_manager.py | 13 KB | 迭代控制 |
-| mem_monitoring.py | 12 KB | 监控与日志 |
-| local_linemodel_basic.py | 8 KB | 谱线模型 |
-| tomography_forward.py | 7.1 KB | 正演流程 |
-| disk_geometry.py | 7.8 KB | 盘几何 |
+| mainFuncs.py | 37 KB | Parameter parsing, compatibility |
+| velspace_DiskIntegrator.py | 27 KB | Core physics integration |
+| SpecIO.py | 27 KB | Spectrum I/O |
+| tomography_inversion.py | 34 KB | MEM inversion workflow |
+| tomography_config.py | 21 KB | Config container |
+| mem_optimization.py | 19 KB | MEM optimization acceleration |
+| mem_tomography.py | 19 KB | MEM adapter layer |
+| mem_generic.py | 17 KB | Generic MEM algorithm |
+| tomography_result.py | 16 KB | Result container |
+| grid_tom.py | 14 KB | Grid generation |
+| iteration_manager.py | 13 KB | Iteration control |
+| mem_monitoring.py | 12 KB | Monitoring & Logging |
+| local_linemodel_basic.py | 8 KB | Line model |
+| tomography_forward.py | 7.1 KB | Forward workflow |
+| disk_geometry.py | 7.8 KB | Disk geometry |
 
-**总计**：约 327 KB 的核心代码库。
+**Total**: Approx. 327 KB of core codebase.
 
 ---
 
-## 参考文献与设计原则
+## References and Design Principles
 
-### 核心算法
+### Core Algorithms
 - Skilling & Bryan (1984): Maximum Entropy Image Reconstruction
 - Hobson & Lasenby (1998): Magnetic field inversion using entropy methods
 
-### 设计模式
-- **分层架构**：UI → Config → Workflow → Physics → Tools
-- **配置对象**：类型安全的参数封装
-- **结果容器**：统一的输出结构
-- **适配器模式**：通用算法与项目特定物理的解耦
-- **回调设计**：MEM优化器与项目无关
+### Design Patterns
+- **Layered Architecture**: UI → Config → Workflow → Physics → Tools
+- **Config Object**: Type-safe parameter encapsulation
+- **Result Container**: Unified output structure
+- **Adapter Pattern**: Decoupling of generic algorithms and project-specific physics
+- **Callback Design**: MEM optimizer is project-agnostic
 
-### 扩展性原则
-- 新谱线模型：继承 `BaseLineModel`
-- 新几何模型：修改 `disk_geometry.py`
-- 新观测格式：扩展 `SpecIO.py`
-- 新反演方法：创建新工作流模块
+### Extensibility Principles
+- New Line Model: Inherit `BaseLineModel`
+- New Geometry Model: Modify `disk_geometry.py`
+- New Obs Format: Extend `SpecIO.py`
+- New Inversion Method: Create new workflow module
 
 ---
 
-**文档维护**: 每次重大重构后更新  
-**最后修改**: 2025-11-15  
-**贡献者**: pyZeeTom development team
+**Documentation Maintenance**: Update after every major refactoring
+**Last Modified**: 2025-11-15
+**Contributors**: pyZeeTom development team

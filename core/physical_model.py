@@ -457,6 +457,10 @@ class PhysicalModelBuilder:
             integrator_kwargs['disk_r0'] = float(
                 getattr(self.par, 'radius', 1.0))
 
+        if 'normalize_continuum' not in integrator_kwargs:
+            integrator_kwargs['normalize_continuum'] = bool(
+                getattr(self.par, 'normalize_continuum', True))
+
         # 生成默认速度网格（如果未提供）
         if v_grid is None:
             Vmax = float(self.par.Vmax)

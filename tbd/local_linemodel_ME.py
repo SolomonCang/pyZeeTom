@@ -1,4 +1,4 @@
-# linemodel.py  (ME + Unno–Rachkovsky; 输入为建议格式，支持发射分量附加 Voigt 峰)
+# linemodel.py  (ME + Unno–Rachkovsky; Input is suggested format, supports additional Voigt peak for emission component)
 import numpy as np
 
 _C_KMS = 2.99792458e5  # km/s
@@ -7,17 +7,18 @@ _ZEEMAN_CONST = 4.66864e-12  # ΔλB(nm) = const * g * λ0^2 * B(G)
 
 class LineData:
     """
-    单行谱线参数（仅使用首行非注释）：
+    Single line parameters (only uses the first non-comment line):
       wl0  g  eta0  beta  widthGauss(km/s)  widthLorentz_ratio  [fI]  [fV]  [emitAmp]  [emitWidthScale]
-    说明：
-      - eta0: 线心吸收/连续比（>0）
-      - beta: 源函数斜率，S(τ)=S0(1+βτ)
-      - widthGauss: sqrt(2)*σ_v，单位 km/s
+    Description:
+      - eta0: Line center absorption/continuum ratio (>0)
+      - beta: Source function slope, S(τ)=S0(1+βτ)
+      - widthGauss: sqrt(2)*σ_v, unit km/s
       - widthLorentz_ratio: Γ/(sqrt(2)*σ_v) = gamma/widthGauss
-      - fI, fV: 填充因子，默认 1，且 fI ∈ [0,1]（保留物理含义）
-      - emitAmp: 附加发射峰幅度 A_e（≥0，默认 0，仅建议在“发射分量”里给）
-      - emitWidthScale: 发射峰宽度缩放 s_e（>0，默认 1.0）
+      - fI, fV: Filling factors, default 1, and fI ∈ [0,1] (preserve physical meaning)
+      - emitAmp: Additional emission peak amplitude A_e (≥0, default 0, suggested only for "emission component")
+      - emitWidthScale: Emission peak width scale s_e (>0, default 1.0)
     """
+
     def __init__(self, filename):
         self.wl0 = None
         self.g = None
@@ -43,7 +44,7 @@ class LineData:
 
                 if len(vals) < 6:
                     raise ValueError(
-                        "ME 建议格式至少需 6 列: wl0 g eta0 beta widthGauss widthLorentz_ratio [fI] [fV] [emitAmp] [emitWidthScale]"
+                        "ME suggested format requires at least 6 columns: wl0 g eta0 beta widthGauss widthLorentz_ratio [fI] [fV] [emitAmp] [emitWidthScale]"
                     )
 
                 self.wl0 = float(vals[0])
@@ -61,25 +62,29 @@ class LineData:
                 if len(vals) >= 10:
                     self.emitWidthScale = float(vals[9])
 
-                # 简单边界检查
+                # Simple boundary checks
                 if self.widthGauss <= 0:
-                    raise ValueError("widthGauss 必须为正 (km/s)。")
+                    raise ValueError("widthGauss must be positive (km/s).")
                 if self.widthLorentz < 0:
-                    raise ValueError("widthLorentz_ratio 不可为负。")
+                    raise ValueError("widthLorentz_ratio cannot be negative.")
                 if not (0.0 <= self.fI <= 1.0):
-                    raise ValueError("fI 应在 [0,1] 内（保持填充因子物理意义）。")
+                    raise ValueError(
+                        "fI should be in [0,1] (preserve filling factor physical meaning)."
+                    )
                 if not (0.0 <= self.fV <= 1.0):
-                    raise ValueError("fV 应在 [0,1] 内。")
+                    raise ValueError("fV should be in [0,1].")
                 if self.emitAmp < 0.0:
-                    raise ValueError("emitAmp 应 ≥ 0（仅在发射分量中使用正值）。")
+                    raise ValueError(
+                        "emitAmp should be ≥ 0 (use positive value only in emission component)."
+                    )
                 if self.emitWidthScale <= 0.0:
-                    raise ValueError("emitWidthScale 应 > 0。")
+                    raise ValueError("emitWidthScale should be > 0.")
 
                 self.numLines = 1
                 break
 
         if self.numLines == 0:
-            raise ValueError("未读取到有效谱线参数。")
+            raise ValueError("No valid line parameters read.")
 
 
 def _as_col(arr, Npix, dtype=float):
@@ -142,23 +147,26 @@ def _voigt_faraday_humlicek(u, a):
 
 class MilneEddingtonURDual:
     """
-    ME + UR 全 Stokes 解，双参数集（吸收/发射）线性加权：
+    ME + UR Full Stokes solution, dual parameter set (absorption/emission) linear weighting:
       S_total = w_abs * S_abs + w_emit * S_emit
 
-    发射分量新特性：
-      在该分量的 I 上叠加附加源 E(λ) = emitAmp * H_e(λ)，其中 H_e 是以
-      emitWidthScale 倍宽度计算的 Voigt 轮廓（仅取实部 H）。
+    New feature for emission component:
+      Superimpose an additional source E(λ) = emitAmp * H_e(λ) on the I of this component,
+      where H_e is the Voigt profile calculated with emitWidthScale times width (only real part H).
 
-    使用方式：
-      - 吸收分量文件不需提供 emitAmp/emitWidthScale（默认 0,1）。
-      - 发射分量文件可提供 emitAmp>0（建议 0.1~1.5），emitWidthScale 可调宽度。
+    Usage:
+      - Absorption component file does not need to provide emitAmp/emitWidthScale (default 0, 1).
+      - Emission component file can provide emitAmp > 0 (suggested 0.1~1.5), emitWidthScale adjustable width.
 
     """
+
     def __init__(self, line_absorb: LineData, line_emit: LineData):
-        # 两组谱线必须同一条线（wl0, g 一致）
-        if (abs(line_absorb.wl0 - line_emit.wl0) >
-                1e-9) or (abs(line_absorb.g - line_emit.g) > 1e-9):
-            raise ValueError("吸收与发射参数的 wl0 与 g 必须一致")
+        # Both lines must be the same line (wl0, g consistent)
+        if (abs(line_absorb.wl0 - line_emit.wl0)
+                > 1e-9) or (abs(line_absorb.g - line_emit.g) > 1e-9):
+            raise ValueError(
+                "wl0 and g of absorption and emission parameters must be consistent"
+            )
         self.ld_abs = line_absorb
         self.ld_emit = line_emit
 
@@ -174,13 +182,13 @@ class MilneEddingtonURDual:
                 mu=None,
                 enable_IQVU=(True, True, True, True)):
         """
-        - wl_grid: (Nλ,) 或 (Nλ,Npix)
-        - Ic_weight: (Npix,) 面元权重（肢暗、面积等）
-        - weight_absorb, weight_emit: 可为标量或 (Npix,)；默认 1/0
-        - 磁场：优先 Bmod, Btheta, Bchi；否则尝试 Blos 仅给纵向
-        - mu: 视向余弦 (Npix,)；未给则默认为 1
-        - enable_IQVU: 元组开关
-        返回 dict: 'I','Q','U','V' -> (Nλ,Npix)
+        - wl_grid: (Nλ,) or (Nλ,Npix)
+        - Ic_weight: (Npix,) Surface element weight (limb darkening, area, etc.)
+        - weight_absorb, weight_emit: Can be scalar or (Npix,); default 1/0
+        - Magnetic field: Prefer Bmod, Btheta, Bchi; otherwise try Blos only for longitudinal
+        - mu: Line-of-sight cosine (Npix,); default 1 if not given
+        - enable_IQVU: Tuple switch
+        Returns dict: 'I','Q','U','V' -> (Nλ,Npix)
         """
         enable_I, enable_Q, enable_U, enable_V = enable_IQVU
 
@@ -191,7 +199,7 @@ class MilneEddingtonURDual:
 
         w_area = np.asarray(Ic_weight, dtype=float).reshape(1, Npix)
 
-        # 几何与磁场
+        # Geometry and Magnetic Field
         if (Bmod is not None) and (Btheta is not None):
             Bmod = _as_col(Bmod, Npix)
             Btheta = _as_col(Btheta, Npix)
@@ -200,7 +208,7 @@ class MilneEddingtonURDual:
             else:
                 Bchi = _as_col(Bchi, Npix)
         else:
-            # 回退到仅给 Blos 的情况：认为纯纵向场（θ=0 或 π），Q/U≈0
+            # Fallback to Blos only case: assume purely longitudinal field (θ=0 or π), Q/U≈0
             if Blos is None:
                 Bmod = np.zeros((1, Npix), dtype=float)
                 Btheta = np.zeros((1, Npix), dtype=float)
@@ -217,23 +225,23 @@ class MilneEddingtonURDual:
         else:
             mu = _as_col(mu, Npix)
 
-        # 组件权重
+        # Component weights
         w_abs = _as_col(weight_absorb, Npix)
         w_em = _as_col(weight_emit, Npix)
 
-        # 分量求解
+        # Component solution
         I_abs, Q_abs, U_abs, V_abs = self._solve_me_ur_component(
             wl_grid, self.ld_abs, Bmod, Btheta, Bchi, mu, enable_IQVU)
 
         I_em, Q_em, U_em, V_em = self._solve_me_ur_component(
             wl_grid, self.ld_emit, Bmod, Btheta, Bchi, mu, enable_IQVU)
 
-        # 在发射分量的 I 上叠加附加源 E(λ) = emitAmp * H_e(λ)
+        # Superimpose additional source E(λ) = emitAmp * H_e(λ) on I of emission component
         if enable_I and (self.ld_emit.emitAmp > 0.0):
             He = self._voigt_profile_for_emission(wl_grid, self.ld_emit)
             I_em = I_em + self.ld_emit.emitAmp * He
 
-        # 线性叠加两分量
+        # Linear superposition of two components
         I = (w_abs * I_abs + w_em * I_em) * w_area if enable_I else np.zeros(
             (Nlam, Npix))
         Q = (w_abs * Q_abs + w_em * Q_em) * w_area if enable_Q else np.zeros(
@@ -247,12 +255,12 @@ class MilneEddingtonURDual:
 
     def _voigt_profile_for_emission(self, wl_grid, ld: LineData):
         """
-        基于发射分量参数构造附加源的 Voigt 实部 H_e(λ)：
-          - 中心 wl0 与谱线一致
-          - 宽度: Δλ_D_e = emitWidthScale * Δλ_D(line)
-          - 阻尼: a_e = emitWidthScale * a(line)    （可选的等比缩放，简单且稳定）
-          - 仅取 Voigt 的实部 H_e（非极化附加源，不改动 Q,U,V）
-          - 归一：与 main 解一致：H = Re(W)/sqrt(pi)
+        Construct Voigt real part H_e(λ) for additional source based on emission component parameters:
+          - Center wl0 consistent with line
+          - Width: Δλ_D_e = emitWidthScale * Δλ_D(line)
+          - Damping: a_e = emitWidthScale * a(line)    (Optional proportional scaling, simple and stable)
+          - Only take real part H_e of Voigt (unpolarized additional source, does not change Q, U, V)
+          - Normalization: Consistent with main solution: H = Re(W)/sqrt(pi)
         """
         wl0 = float(ld.wl0)
         a = ld.widthLorentz
@@ -272,8 +280,8 @@ class MilneEddingtonURDual:
     def _solve_me_ur_component(self, wl_grid, ld: LineData, Bmod, Btheta, Bchi,
                                mu, enable_IQVU):
         """
-        单组件 ME+UR 全解析解。返回 I,Q,U,V（均为 (Nλ,Npix)）。
-        Ic 归一为 1；外部用 w_area 再加权。
+        Single component ME+UR full analytical solution. Returns I, Q, U, V (all (Nλ, Npix)).
+        Ic normalized to 1; externally weighted by w_area.
         """
         enable_I, enable_Q, enable_U, enable_V = enable_IQVU
         Nlam, Npix = wl_grid.shape
@@ -287,13 +295,13 @@ class MilneEddingtonURDual:
         fI = _as_col(ld.fI, Npix)
         fV = _as_col(ld.fV, Npix)
 
-        # 磁分裂位移 Δλ_B (nm)
+        # Magnetic splitting displacement Δλ_B (nm)
         dlamB = _ZEEMAN_CONST * g_eff * (wl0**2) * Bmod / np.maximum(fV, 1e-12)
 
-        # 高斯宽度 Δλ_D (nm) = (vG/c)*λ0
+        # Gaussian width Δλ_D (nm) = (vG/c)*λ0
         dlamD = (vG / _C_KMS) * wl0
 
-        # 角度因子
+        # Angle factors
         theta = Btheta
         chi = Bchi
         cos1 = np.cos(theta)
@@ -302,17 +310,17 @@ class MilneEddingtonURDual:
         cos2chi = np.cos(2.0 * chi)
         sin2chi = np.sin(2.0 * chi)
 
-        # Π, σ± 的归一频移
+        # Normalized frequency shift for Π, σ±
         u_pi = (wl_grid - wl0) / dlamD
         u_r = (wl_grid - wl0 - dlamB) / dlamD
         u_l = (wl_grid - wl0 + dlamB) / dlamD
 
-        # 计算 Faddeeva
+        # Compute Faddeeva
         Wpi = _voigt_faraday_humlicek(u_pi, a)
         Wr = _voigt_faraday_humlicek(u_r, a)
         Wl = _voigt_faraday_humlicek(u_l, a)
 
-        # 归一：Voigt H = Re(W)/sqrt(pi), Faraday F = Im(W)/sqrt(pi)
+        # Normalization: Voigt H = Re(W)/sqrt(pi), Faraday F = Im(W)/sqrt(pi)
         sqpi = np.sqrt(np.pi)
         H_pi = Wpi.real / sqpi
         F_pi = Wpi.imag / sqpi
@@ -321,11 +329,11 @@ class MilneEddingtonURDual:
         H_l = Wl.real / sqpi
         F_l = Wl.imag / sqpi
 
-        # 传播与色散系数（按 Unno-Rachkovsky）
+        # Propagation and dispersion coefficients (according to Unno-Rachkovsky)
         kL = eta0
         eta_I = 1.0 + 0.5 * kL * (H_r + H_l) * (
             1.0 + cos1**2) * 0.5 + kL * H_pi * 0.5 * sin2
-        # 为清晰改写：传统写法
+        # Rewritten for clarity: traditional notation
         eta_I = 1.0 + kL * (0.5 * (H_r + H_l) * (1.0 + cos1**2) / 2.0 + H_pi *
                             (sin2 / 2.0))
         eta_Q = kL * (H_pi - 0.5 * (H_r + H_l)) * (sin2 * cos2chi) / 2.0
@@ -336,7 +344,7 @@ class MilneEddingtonURDual:
         rho_U = kL * (F_pi - 0.5 * (F_r + F_l)) * (sin2 * sin2chi) / 2.0
         rho_V = kL * (F_r - F_l) * cos1 / 2.0
 
-        # 紧凑记号
+        # Compact notation
         etaI = eta_I
         etaQ = eta_Q
         etaU = eta_U
@@ -345,7 +353,7 @@ class MilneEddingtonURDual:
         rhoU = rho_U
         rhoV = rho_V
 
-        # 稳健的 Δ 表达
+        # Robust Δ expression
         Delta = ((etaI**2 - etaQ**2 - etaU**2 - etaV**2 + rhoQ**2 + rhoU**2 +
                   rhoV**2)**2 + 4.0 *
                  ((etaQ * rhoQ + etaU * rhoU + etaV * rhoV)**2 +
@@ -354,11 +362,11 @@ class MilneEddingtonURDual:
                   (etaQ * rhoU - etaU * rhoQ)**2))
         Delta = np.maximum(Delta, 1e-300)
 
-        # 源函数项
+        # Source function term
         beta_mu = beta * mu
         denom = 1.0 + beta_mu
 
-        # A_* 项
+        # A_* terms
         etaI2 = etaI**2
         K = etaI2 + rhoQ**2 + rhoU**2 + rhoV**2
         A_I = etaI * K
@@ -369,7 +377,7 @@ class MilneEddingtonURDual:
         A_V = etaI2 * etaV + etaI * (rhoU * etaQ - rhoQ * etaU) + etaV * (
             rhoQ**2 + rhoU**2 + rhoV**2 - (etaQ**2 + etaU**2 + etaV**2))
 
-        # Stokes（归一到 Ic=1 的出射强度）
+        # Stokes (emergent intensity normalized to Ic=1)
         I = (1.0 + (beta_mu * A_I) / Delta) / denom if enable_I else np.zeros(
             (Nlam, Npix))
         Q = ((-beta_mu) * A_Q / (Delta * denom)) if enable_Q else np.zeros(
@@ -379,7 +387,7 @@ class MilneEddingtonURDual:
         V = ((-beta_mu) * A_V / (Delta * denom)) if enable_V else np.zeros(
             (Nlam, Npix))
 
-        # 非磁/未分辨混合：fI, fV（保持 fI ∈ [0,1]）
+        # Non-magnetic/unresolved mixture: fI, fV (keep fI ∈ [0,1])
         I0 = np.ones_like(I)
         I = ld.fI * I + (1.0 - ld.fI) * I0
         Q *= ld.fV

@@ -20,6 +20,7 @@ disk_velocity_rigid_inner : Rigid body inner rotation velocity profile
 
 import numpy as np
 from typing import Optional
+from scipy.ndimage import convolve1d
 from core.grid_tom import diskGrid
 
 __all__ = [
@@ -43,7 +44,7 @@ def convolve_gaussian_1d(y, dv, fwhm):
     Parameters
     ----------
     y : np.ndarray
-        Input spectrum
+        Input spectrum (1D or 2D). If 2D, convolve along axis 0.
     dv : float
         Velocity grid spacing (km/s)
     fwhm : float
@@ -56,18 +57,22 @@ def convolve_gaussian_1d(y, dv, fwhm):
     """
     if fwhm <= 0.0:
         return y
+
     sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-    half = int(np.ceil(3.0 * sigma / np.maximum(dv, 1e-30)))
-    if half < 1:
+    sigma_pix = sigma / np.maximum(dv, 1e-30)
+
+    # Kernel radius (4 sigma is sufficient)
+    radius = int(np.ceil(4.0 * sigma_pix))
+    if radius < 1:
         return y
-    x = np.arange(-half, half + 1) * dv
-    ker = np.exp(-0.5 * (x / sigma)**2)
-    ker /= np.sum(ker)
-    padL = np.full(half, y[0])
-    padR = np.full(half, y[-1])
-    tmp = np.concatenate([padL, y, padR])
-    conv = np.convolve(tmp, ker, mode='valid')
-    return conv
+
+    x = np.arange(-radius, radius + 1)
+    kernel = np.exp(-0.5 * (x / sigma_pix)**2)
+    kernel /= np.sum(kernel)
+
+    # Use scipy.ndimage.convolve1d with nearest padding (replicating edge values)
+    # This matches the previous behavior of padding with y[0] and y[-1]
+    return convolve1d(y, kernel, axis=0, mode='nearest')
 
 
 def disk_velocity_rigid_inner(r, v0_r0, p, r0):
@@ -450,7 +455,8 @@ class VelspaceDiskIntegrator:
 
         # Store geometric properties needed for spectrum computation
         self.W = W
-        self.cont = np.sum(W)
+        # self.cont should represent the total continuum flux of the VISIBLE region
+        self.cont = np.sum(self.Ic_weight)
         self.v_los = v_los
         self.v_phi = v_phi if 'v_phi' in locals() else None
 
@@ -585,6 +591,82 @@ class VelspaceDiskIntegrator:
             self.U = U_conv
 
         return self.I
+
+    def compute_derivatives(self, B_los=None, B_perp=None, chi=None, amp=None):
+        """Compute analytical derivatives of Stokes spectra w.r.t parameters.
+        
+        Returns
+        -------
+        dict
+            Dictionary of derivative matrices (Nlam, Npix).
+            Keys: 'dI_damp', 'dV_dBlos', etc.
+        """
+        # Update geometry if parameters provided
+        if B_los is not None:
+            self.geom.B_los = np.asarray(B_los)
+        if B_perp is not None:
+            self.geom.B_perp = np.asarray(B_perp)
+        if chi is not None:
+            self.geom.chi = np.asarray(chi)
+        if amp is not None:
+            self.geom.amp = np.asarray(amp)
+
+        # Get parameters from geometry
+        if hasattr(self.geom, "amp") and self.geom.amp is not None:
+            amp_arr = np.asarray(self.geom.amp, dtype=float)
+        else:
+            amp_arr = np.ones(self.grid.numPoints, dtype=float)
+
+        amp_model = amp_arr
+
+        # Magnetic fields
+        if hasattr(self.geom, "B_los") and self.geom.B_los is not None:
+            Blos_arr = np.asarray(self.geom.B_los)
+        else:
+            Blos_arr = np.zeros(self.grid.numPoints, dtype=float)
+
+        if hasattr(self.geom, "B_perp") and self.geom.B_perp is not None:
+            Bperp_arr = np.asarray(self.geom.B_perp)
+        else:
+            Bperp_arr = None
+
+        if hasattr(self.geom, "chi") and self.geom.chi is not None:
+            chi_arr = np.asarray(self.geom.chi)
+        else:
+            chi_arr = None
+
+        # Compute local derivatives
+        # Note: Ic_weight is passed to apply geometric weights to derivatives
+        derivs = self.line_model.compute_local_derivatives(
+            self.wl_cells,
+            amp_model,
+            Blos=Blos_arr,
+            Bperp=Bperp_arr,
+            chi=chi_arr,
+            Ic_weight=self.Ic_weight)
+
+        # Apply convolution and normalization
+        processed_derivs = {}
+
+        # Pre-calculate normalization factor
+        norm_factor = 1.0
+        if self.normalize_continuum and self.cont > 0:
+            norm_factor = 1.0 / self.cont
+
+        for key, val in derivs.items():
+            # Convolution (along axis 0)
+            if self.inst_fwhm > 0.0:
+                val_conv = convolve_gaussian_1d(val, self.dv, self.inst_fwhm)
+            else:
+                val_conv = val
+
+            # Normalization
+            if norm_factor != 1.0:
+                processed_derivs[key] = val_conv * norm_factor
+            else:
+                processed_derivs[key] = val_conv
+
+        return processed_derivs
 
     # ========================================
     # Model I/O: geomodel.tomog

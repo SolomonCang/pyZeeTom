@@ -1,11 +1,11 @@
-# spot_simulator.py (精简版)
-# Spot模拟库：多spot配置、几何模型构建、.tomog输出
-# 功能：
-#   1. 多个spot的管理（位置、磁场、时间演化）
-#   2. 将spot映射到disk grid像素
-#   3. 生成符合规范的.tomog模型文件
-#   4. 注意：谱线合成由 pyzeetom/tomography.py 的0-iter正演处理
-#           通过 initTomogFile 参数加载模型
+# spot_simulator.py (Simplified)
+# Spot Simulation Library: Multi-spot configuration, geometry model construction, .tomog output
+# Features:
+#   1. Management of multiple spots (position, magnetic field, time evolution)
+#   2. Mapping spots to disk grid pixels
+#   3. Generating compliant .tomog model files
+#   4. Note: Spectral synthesis is handled by 0-iter forward modeling in pyzeetom/tomography.py
+#           Load model via initTomogFile parameter
 
 import datetime as dt
 from dataclasses import dataclass
@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from scipy import interpolate
 
-# 项目内部模块导入
-# 注意：如果存在循环依赖问题，部分导入可能需要放回函数内部
+# Internal module imports
+# Note: If circular dependency issues arise, some imports may need to be moved inside functions
 try:
     from core.disk_geometry_integrator import (SimpleDiskGeometry,
                                                VelspaceDiskIntegrator)
@@ -25,23 +25,24 @@ try:
                                             LineData)
     from core.tomography_result import ForwardModelResult
 except ImportError:
-    # 仅为了防止在缺少 core 模块的环境下语法检查报错，实际运行时应确保 core 在路径中
+    # Only to prevent syntax check errors in environments missing the core module;
+    # ensure core is in the path during actual runtime
     pass
 
 
 @dataclass
 class SpotConfig:
-    """单个spot的配置参数"""
-    r: float  # 径向位置（盘面半径单位）
-    phi: float  # 初始方位角（弧度）
-    amplitude: float  # 振幅（正值=发射，负值=吸收）
-    spot_type: str = 'emission'  # 'emission' 或 'absorption'
-    radius: float = 0.5  # spot的径向宽度（FWHM）
-    width_type: str = 'gaussian'  # 宽度类型 'gaussian' 或 'tophat'
-    B_los: float = 0.0  # 视向磁场
-    B_perp: float = 0.0  # 横向磁场
-    chi: float = 0.0  # 磁场方位角（弧度）
-    velocity_shift: float = 0.0  # 附加速度偏移（km/s）
+    """Configuration parameters for a single spot"""
+    r: float  # Radial position (in disk radius units)
+    phi: float  # Initial azimuth (radians)
+    amplitude: float  # Amplitude (positive=emission, negative=absorption)
+    spot_type: str = 'emission'  # 'emission' or 'absorption'
+    radius: float = 0.5  # Radial width of the spot (FWHM)
+    width_type: str = 'gaussian'  # Width type 'gaussian' or 'tophat'
+    B_los: float = 0.0  # Line-of-sight magnetic field
+    B_perp: float = 0.0  # Transverse magnetic field
+    chi: float = 0.0  # Magnetic field azimuth (radians)
+    velocity_shift: float = 0.0  # Additional velocity shift (km/s)
 
     def __post_init__(self):
         self.r = float(self.r)
@@ -56,11 +57,11 @@ class SpotConfig:
 
 class SpotSimulator:
     """
-    Spot模拟器：
-      - 管理多个spot配置
-      - 将spot映射到disk grid像素
-      - 计算响应函数和磁场分布
-      - 输出.tomog模型文件供后续正演使用
+    Spot Simulator:
+      - Manages multiple spot configurations
+      - Maps spots to disk grid pixels
+      - Computes response functions and magnetic field distributions
+      - Outputs .tomog model files for subsequent forward modeling
     """
 
     def __init__(self,
@@ -71,22 +72,22 @@ class SpotSimulator:
                  r0_rot: float = 1.0,
                  period_days: float = 1.0):
         """
-        初始化spot模拟器
+        Initialize the spot simulator
 
-        参数:
+        Parameters:
         -------
         grid : diskGrid
-            网格对象（来自 grid_tom.py）
+            Grid object (from grid_tom.py)
         inclination_rad : float
-            倾角（弧度），默认60度
+            Inclination (radians), default 60 degrees
         phi0 : float
-            参考方位角（弧度）
+            Reference azimuth (radians)
         pOmega : float
-            较差转动指数（Ω ∝ r^pOmega）
+            Differential rotation index (Omega propto r^pOmega)
         r0_rot : float
-            较差转动参考半径
+            Differential rotation reference radius
         period_days : float
-            自转周期（天）
+            Rotation period (days)
         """
         self.grid = grid
         self.inclination_rad = float(inclination_rad)
@@ -95,41 +96,44 @@ class SpotSimulator:
         self.r0_rot = float(r0_rot)
         self.period_days = float(period_days)
 
-        # Spot列表
+        # List of spots
         self.spots: List[SpotConfig] = []
 
-        # 观测参数数组（与 phase 同长度）
-        # 这些参数用于生成多相位合成数据
-        self.phases: np.ndarray = np.array([])  # 观测相位（0~1）
-        self.vel_shifts: np.ndarray = np.array([])  # 速度偏移（km/s），每个相位一个值
-        self.pol_channels: list = []  # 偏振通道，每个相位一个值（'I'/'V'/'Q'/'U'）
+        # Observation parameter arrays (same length as phase)
+        # These parameters are used to generate multi-phase synthetic data
+        self.phases: np.ndarray = np.array([])  # Observation phases (0~1)
+        self.vel_shifts: np.ndarray = np.array(
+            [])  # Velocity shifts (km/s), one per phase
+        self.pol_channels: list = [
+        ]  # Polarization channels, one per phase ('I'/'V'/'Q'/'U')
 
-        # 初始化像素属性数组
+        # Initialize pixel attribute arrays
         self._init_pixel_arrays()
 
     def _init_pixel_arrays(self):
-        """初始化所有像素属性数组"""
+        """Initialize all pixel attribute arrays"""
         n = self.grid.numPoints
-        self.amp = np.ones(n, dtype=float)  # 谱线振幅（>0，直接来自几何）
+        self.amp = np.ones(
+            n, dtype=float)  # Line amplitude (>0, directly from geometry)
         self.B_los_map = np.zeros(n, dtype=float)
         self.B_perp_map = np.zeros(n, dtype=float)
         self.chi_map = np.zeros(n, dtype=float)
 
     def add_spot(self, spot_config: SpotConfig):
-        """添加单个spot"""
+        """Add a single spot"""
         self.spots.append(spot_config)
 
     def add_spots(self, spot_configs: List[SpotConfig]):
-        """添加多个spot"""
+        """Add multiple spots"""
         self.spots.extend(spot_configs)
 
     def create_spot(self, r: float, phi: float, amplitude: float,
                     **kwargs) -> SpotConfig:
         """
-        创建并添加单个spot（快捷方法）
+        Create and add a single spot (shortcut method)
 
-        参数: 参见 SpotConfig
-        返回: SpotConfig对象
+        Parameters: See SpotConfig
+        Returns: SpotConfig object
         """
         spot = SpotConfig(r=r, phi=phi, amplitude=amplitude, **kwargs)
         self.add_spot(spot)
@@ -137,21 +141,21 @@ class SpotSimulator:
 
     def evolve_spots_to_phase(self, phase: float) -> List[SpotConfig]:
         """
-        将spot演化到指定相位（考虑较差转动）
+        Evolve spots to a specified phase (considering differential rotation)
 
-        参数:
+        Parameters:
         -------
         phase : float
-            旋转相位（0~1）
+            Rotation phase (0~1)
 
-        返回:
+        Returns:
         -------
         List[SpotConfig]
-            演化后的spot列表
+            List of evolved spots
         """
         evolved_spots = []
         for spot in self.spots:
-            # 复制当前spot配置
+            # Copy current spot configuration
             s = SpotConfig(r=spot.r,
                            phi=spot.phi,
                            amplitude=spot.amplitude,
@@ -163,14 +167,14 @@ class SpotSimulator:
                            chi=spot.chi,
                            velocity_shift=spot.velocity_shift)
 
-            # 考虑较差转动的相位演化
-            # Δφ = 2π * phase * (r/r0_rot)^(pOmega+1)
-            # 这是从 pOmega 定义出发：Ω(r) = Ω_ref * (r/r0_rot)^pOmega
+            # Phase evolution considering differential rotation
+            # Delta phi = 2pi * phase * (r/r0_rot)^(pOmega+1)
+            # This follows from pOmega definition: Omega(r) = Omega_ref * (r/r0_rot)^pOmega
             radius_ratio = s.r / self.r0_rot if self.r0_rot > 0 else 1.0
             delphi = 2.0 * np.pi * phase * (radius_ratio**(self.pOmega + 1.0))
             s.phi = s.phi + delphi
 
-            # 归一化到 [0, 2π)
+            # Normalize to [0, 2pi)
             s.phi = s.phi % (2.0 * np.pi)
 
             evolved_spots.append(s)
@@ -178,71 +182,72 @@ class SpotSimulator:
         return evolved_spots
 
     def _gaussian_weight(self, dr: np.ndarray, sigma: float) -> np.ndarray:
-        """高斯权重函数"""
+        """Gaussian weight function"""
         return np.exp(-0.5 * (dr / sigma)**2)
 
     def _tophat_weight(self, dr: np.ndarray, radius: float) -> np.ndarray:
-        """顶帽权重函数（rect函数）"""
+        """Top-hat weight function (rect function)"""
         weight = np.zeros_like(dr)
         weight[np.abs(dr) <= radius] = 1.0
         return weight
 
     def _compute_azimuthal_weight(self, dphi: np.ndarray,
                                   sigma_phi: float) -> np.ndarray:
-        """方位角权重（高斯）"""
-        # 处理 2π 周期性
+        """Azimuthal weight (Gaussian)"""
+        # Handle 2pi periodicity
         dphi_wrapped = np.abs(dphi)
         dphi_wrapped = np.minimum(dphi_wrapped, 2.0 * np.pi - dphi_wrapped)
         return np.exp(-0.5 * (dphi_wrapped / sigma_phi)**2)
 
     def apply_spots_to_grid(self, phase: float = 0.0) -> None:
         """
-        应用spot到网格，计算响应和磁场分布
+        Apply spots to the grid, computing response and magnetic field distribution
 
-        参数:
+        Parameters:
         -------
         phase : float
-            旋转相位（0~1）
+            Rotation phase (0~1)
         """
-        # 初始化
+        # Initialize
         self._init_pixel_arrays()
 
-        # 获取演化的spot
+        # Get evolved spots
         spots_at_phase = self.evolve_spots_to_phase(phase)
 
-        # 对每个spot应用到网格
+        # Apply each spot to the grid
         for spot in spots_at_phase:
             self._apply_single_spot(spot)
 
     def _apply_single_spot(self, spot: SpotConfig) -> None:
-        """将单个spot应用到网格"""
-        # 计算每个像素到spot的距离
+        """Apply a single spot to the grid"""
+        # Calculate distance from each pixel to the spot
         dr = np.sqrt((self.grid.r - spot.r)**2)
         dphi = self.grid.phi - spot.phi
 
-        # 径向权重
+        # Radial weight
         if spot.width_type == 'gaussian':
             sigma_r = spot.radius / (2.0 * np.sqrt(2.0 * np.log(2.0)))
             r_weight = self._gaussian_weight(dr, sigma_r)
         else:  # tophat
             r_weight = self._tophat_weight(dr, spot.radius)
 
-        # 方位角权重（高斯，宽度为 spot.radius 在方位角方向）
-        sigma_phi = spot.radius / (self.grid.r + 1e-10)  # 防止除零
+        # Azimuthal weight (Gaussian, width is spot.radius in azimuthal direction)
+        sigma_phi = spot.radius / (self.grid.r + 1e-10
+                                   )  # Prevent division by zero
         phi_weight = self._compute_azimuthal_weight(dphi, sigma_phi)
 
-        # 总权重
+        # Total weight
         weight = r_weight * phi_weight
 
-        # 应用谱线振幅
+        # Apply line amplitude
         if spot.spot_type == 'emission':
-            # 发射：amp > 1
+            # Emission: amp > 1
             self.amp += (spot.amplitude) * weight
         else:  # absorption
-            # 吸收：amp < 1
+            # Absorption: amp < 1
             self.amp += (spot.amplitude) * weight
 
-        # 应用磁场（加权平均）
+        # Apply magnetic field (weighted average)
         weight_sum = np.sum(weight)
         if weight_sum > 0:
             self.B_los_map += spot.B_los * weight
@@ -251,22 +256,22 @@ class SpotSimulator:
 
     def create_geometry_object(self, phase: float = 0.0):
         """
-        创建几何对象供VelspaceDiskIntegrator使用
+        Create a geometry object for use by VelspaceDiskIntegrator
 
-        参数:
+        Parameters:
         -------
         phase : float
-            旋转相位
+            Rotation phase
 
-        返回:
+        Returns:
         -------
         SimpleDiskGeometry
-            几何对象，包含网格、磁场参数、谱线振幅等
+            Geometry object containing grid, magnetic field parameters, line amplitudes, etc.
         """
-        # 应用spot到网格
+        # Apply spots to grid
         self.apply_spots_to_grid(phase)
 
-        # 构造SimpleDiskGeometry对象
+        # Construct SimpleDiskGeometry object
         geom = SimpleDiskGeometry(grid=self.grid,
                                   inclination_deg=float(
                                       np.rad2deg(self.inclination_rad)),
@@ -288,42 +293,42 @@ class SpotSimulator:
                            phase: float = 0.0,
                            meta: Optional[Dict[str, Any]] = None) -> str:
         """
-        将模型导出为.tomog文件供后续正演使用
+        Export the model to a .tomog file for subsequent forward modeling
 
-        该方法使用 VelspaceDiskIntegrator.write_geomodel() 进行标准化输出。
+        This method uses VelspaceDiskIntegrator.write_geomodel() for standardized output.
 
-        参数:
+        Parameters:
         -------
         filepath : str
-            输出文件路径（.tomog格式）
+            Output file path (.tomog format)
         phase : float
-            相位
+            Phase
         meta : dict, optional
-            元信息（目标名、观测参数等）
+            Metadata (target name, observation parameters, etc.)
 
-        返回:
+        Returns:
         -------
         str
-            输出文件路径
+            Output file path
         """
-        # 创建几何对象
+        # Create geometry object
         geom = self.create_geometry_object(phase=phase)
 
-        # 设置元数据
+        # Set metadata
         if meta is None:
             meta = {}
         meta['phase'] = float(phase)
         meta['source'] = 'SpotSimulator'
 
-        # 创建一个虚拟的积分器以使用 write_geomodel 方法
-        # 这里只需要积分器的 write_geomodel 方法和对几何的访问
+        # Create a dummy integrator to use the write_geomodel method
+        # Here we only need the integrator's write_geomodel method and access to the geometry
         try:
-            # 尝试创建完整的积分器（需要谱线模型）
-            # 但仅用于调用 write_geomodel，不需要完整的spectral synthesis
+            # Try to create a full integrator (requires line model)
+            # But only for calling write_geomodel, not for full spectral synthesis
             line_data = LineData('input/lines.txt')
             line_model = GaussianZeemanWeakLineModel(line_data)
 
-            v_grid = np.array([0.0])  # 虚拟速度网格
+            v_grid = np.array([0.0])  # Dummy velocity grid
             integrator = VelspaceDiskIntegrator(geom=geom,
                                                 wl0_nm=656.3,
                                                 v_grid=v_grid,
@@ -331,18 +336,18 @@ class SpotSimulator:
                                                 inst_fwhm_kms=0.0,
                                                 normalize_continuum=False)
 
-            # 使用 integrator 的 write_geomodel 方法
+            # Use integrator's write_geomodel method
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
             integrator.write_geomodel(filepath, meta=meta)
 
         except Exception as e:
-            # 如果无法创建完整的积分器，使用简化的导出方法
+            # If full integrator cannot be created, use simplified export method
             print(
                 f"[SpotSimulator] Warning: Could not use VelspaceDiskIntegrator.write_geomodel(): {e}"
             )
             print(f"[SpotSimulator] Falling back to simplified export...")
 
-            # 构造header
+            # Construct header
             header = {
                 "format": "TOMOG_MODEL",
                 "version": 1,
@@ -362,11 +367,11 @@ class SpotSimulator:
                     if k not in header:
                         header[str(k)] = v
 
-            # 检查是否有 B_perp 和 chi
+            # Check for B_perp and chi
             has_B_perp = np.any(self.B_perp_map != 0.0)
             has_chi = np.any(self.chi_map != 0.0)
 
-            # 列定义
+            # Column definitions
             columns = [
                 "idx", "ring_id", "phi_id", "r", "phi", "area", "Ic_weight",
                 "amp", "Blos"
@@ -376,7 +381,7 @@ class SpotSimulator:
             if has_chi:
                 columns.extend(["chi"])
 
-            # 写文件
+            # Write file
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
 
             with open(filepath, "w", encoding="utf-8") as f:
@@ -392,7 +397,7 @@ class SpotSimulator:
                     else:
                         f.write(f"# {k}: {v}\n")
 
-                # 尝试补充网格边界
+                # Try to supplement grid edges
                 if hasattr(self.grid, "r_edges"):
                     vstr = ",".join(
                         f"{x:.12g}"
@@ -401,7 +406,7 @@ class SpotSimulator:
 
                 f.write("# COLUMNS: " + ", ".join(columns) + "\n")
 
-                # 写数据
+                # Write data
                 n = self.grid.numPoints
                 for i in range(n):
                     row = [
@@ -412,8 +417,8 @@ class SpotSimulator:
                         float(self.grid.r[i]),
                         float(self.grid.phi[i]),
                         float(self.grid.area[i]),
-                        float(1.0),  # Ic_weight (几何权重)
-                        float(self.amp[i]),  # 谱线振幅
+                        float(1.0),  # Ic_weight (geometric weight)
+                        float(self.amp[i]),  # Line amplitude
                         float(self.B_los_map[i]),
                     ]
                     if has_B_perp:
@@ -430,56 +435,58 @@ class SpotSimulator:
             vel_shifts: Optional[np.ndarray] = None,
             pol_channels: Optional[list] = None) -> None:
         """
-        配置多相位合成参数
+        Configure multi-phase synthesis parameters
 
-        参数:
+        Parameters:
         -------
         phases : np.ndarray
-            观测相位数组，形状 (N_phase,)，值可为任意实数 (-∞, +∞)
-            由于较差转动 (pOmega)，不同的相位值会导致 spot 位置不同。
-            物理含义：
-              - phase ∈ [0, 1)  : 自转周期内的分数位置
-              - phase ≥ 1       : 多个自转周期后的位置
-              - phase < 0       : 反向时间演化
-            例如：phase=-0.3, 0.3, 1.3 三个相位会因 pOmega 产生不同的几何配置
+            Observation phase array, shape (N_phase,), values can be any real number (-inf, +inf)
+            Due to differential rotation (pOmega), different phase values result in different spot positions.
+            Physical meaning:
+              - phase in [0, 1)  : Fractional position within rotation period
+              - phase >= 1       : Position after multiple rotation periods
+              - phase < 0        : Reverse time evolution
+            Example: phase=-0.3, 0.3, 1.3 result in different geometric configurations due to pOmega
         vel_shifts : np.ndarray, optional
-            速度偏移数组，形状 (N_phase,)，单位 km/s
-            默认为全零
+            Velocity shift array, shape (N_phase,), unit km/s
+            Default is all zeros
         pol_channels : list, optional
-            偏振通道列表，长度 N_phase
-            每个元素为 'I', 'V', 'Q', 或 'U'
-            默认为全 'V'
+            Polarization channel list, length N_phase
+            Each element is 'I', 'V', 'Q', or 'U'
+            Default is all 'V'
 
-        返回:
+        Returns:
         -------
         None
         """
         phases = np.asarray(phases, dtype=float)
         n_phase = len(phases)
 
-        # 设置速度偏移
+        # Set velocity shifts
         if vel_shifts is None:
             vel_shifts = np.zeros(n_phase, dtype=float)
         else:
             vel_shifts = np.asarray(vel_shifts, dtype=float)
             if len(vel_shifts) != n_phase:
                 raise ValueError(
-                    f"vel_shifts 长度 ({len(vel_shifts)}) 必须与 phases 长度 ({n_phase}) 一致"
+                    f"vel_shifts length ({len(vel_shifts)}) must match phases length ({n_phase})"
                 )
 
-        # 设置偏振通道
+        # Set polarization channels
         if pol_channels is None:
             pol_channels = ['V'] * n_phase
         else:
             pol_channels = list(pol_channels)
             if len(pol_channels) != n_phase:
                 raise ValueError(
-                    f"pol_channels 长度 ({len(pol_channels)}) 必须与 phases 长度 ({n_phase}) 一致"
+                    f"pol_channels length ({len(pol_channels)}) must match phases length ({n_phase})"
                 )
-            # 验证每个通道的合法性
+            # Validate each channel
             for ch in pol_channels:
                 if ch not in ['I', 'V', 'Q', 'U']:
-                    raise ValueError(f"偏振通道必须为 'I', 'V', 'Q', 或 'U'，得到 '{ch}'")
+                    raise ValueError(
+                        f"Polarization channel must be 'I', 'V', 'Q', or 'U', got '{ch}'"
+                    )
 
         self.phases = phases
         self.vel_shifts = vel_shifts
@@ -489,35 +496,38 @@ class SpotSimulator:
                                wl0_nm: float = 656.3,
                                verbose: int = 1) -> Dict[str, Any]:
         """
-        利用 VelspaceDiskIntegrator 生成多相位合成光谱
+        Generate multi-phase synthetic spectra using VelspaceDiskIntegrator
 
-        根据配置的 phases/vel_shifts/pol_channels，为每个相位生成 
-        ForwardModelResult 对象。
+        Generates ForwardModelResult objects for each phase based on configured 
+        phases/vel_shifts/pol_channels.
 
-        参数:
+        Parameters:
         -------
         wl0_nm : float
-            谱线中心波长 (nm)
+            Line center wavelength (nm)
         verbose : int
-            详细程度（0=静默，1=正常，2=详细）
+            Verbosity level (0=silent, 1=normal, 2=detailed)
 
-        返回:
+        Returns:
         -------
         Dict[str, Any]
-            包含键：'results', 'phases', 'vel_shifts', 'pol_channels', 'metadata'
+            Contains keys: 'results', 'phases', 'vel_shifts', 'pol_channels', 'metadata'
 
-        异常:
+        Raises:
         -------
         ValueError
-            未配置 phases（调用 configure_multi_phase_synthesis）
+            If phases are not configured (call configure_multi_phase_synthesis)
         RuntimeError
-            无法加载谱线模型
+            If line model cannot be loaded
         """
         if len(self.phases) == 0:
-            raise ValueError("必须先调用 configure_multi_phase_synthesis()")
+            raise ValueError(
+                "Must call configure_multi_phase_synthesis() first")
 
         if verbose:
-            print(f"[SpotSimulator] 生成 {len(self.phases)} 个相位的合成模型...")
+            print(
+                f"[SpotSimulator] Generating synthetic models for {len(self.phases)} phases..."
+            )
 
         results = []
 
@@ -525,9 +535,9 @@ class SpotSimulator:
             line_data = LineData('input/lines.txt')
             line_model = GaussianZeemanWeakLineModel(line_data)
         except Exception as e:
-            raise RuntimeError(f"无法加载谱线模型: {e}")
+            raise RuntimeError(f"Could not load line model: {e}")
 
-        # 为每个相位生成结果
+        # Generate results for each phase
         for idx, (phase, vel_shift, pol_channel) in enumerate(
                 zip(self.phases, self.vel_shifts, self.pol_channels)):
 
@@ -536,13 +546,13 @@ class SpotSimulator:
                       f"vel_shift={vel_shift:.2f} km/s, pol={pol_channel}")
 
             try:
-                # 创建该相位的几何对象
+                # Create geometry object for this phase
                 geom = self.create_geometry_object(phase=phase)
 
-                # 速度网格
+                # Velocity grid
                 v_grid = np.linspace(-100, 100, 401)
 
-                # 创建积分器
+                # Create integrator
                 integrator = VelspaceDiskIntegrator(geom=geom,
                                                     wl0_nm=wl0_nm,
                                                     v_grid=v_grid,
@@ -551,13 +561,13 @@ class SpotSimulator:
                                                     normalize_continuum=True,
                                                     obs_phase=phase)
 
-                # 获取 Stokes 参数
+                # Get Stokes parameters
                 stokes_i = getattr(integrator, 'I', np.ones_like(v_grid))
                 stokes_v = getattr(integrator, 'V', np.zeros_like(v_grid))
                 stokes_q = getattr(integrator, 'Q', np.zeros_like(v_grid))
                 stokes_u = getattr(integrator, 'U', np.zeros_like(v_grid))
 
-                # 应用速度偏移
+                # Apply velocity shift
                 if vel_shift != 0.0:
                     v_shifted = v_grid - vel_shift
 
@@ -569,10 +579,10 @@ class SpotSimulator:
                                                  fill_value=np.nan)
                         arr[:] = np.nan_to_num(f(v_shifted), nan=0.0)
 
-                    # 保持 I 的连续体为 1
+                    # Keep continuum of I at 1
                     stokes_i[np.isnan(stokes_i)] = 1.0
 
-                # 创建 ForwardModelResult
+                # Create ForwardModelResult
                 result = ForwardModelResult(stokes_i=stokes_i,
                                             stokes_v=stokes_v,
                                             stokes_q=stokes_q,
@@ -588,11 +598,13 @@ class SpotSimulator:
 
             except Exception as e:
                 if verbose:
-                    print(f"  警告：相位 {phase} 失败: {e}")
+                    print(f"  Warning: Phase {phase} failed: {e}")
                 raise
 
         if verbose:
-            print(f"[SpotSimulator] 成功生成 {len(results)} 个合成模型")
+            print(
+                f"[SpotSimulator] Successfully generated {len(results)} synthetic models"
+            )
 
         return {
             'results': results,
@@ -609,7 +621,7 @@ class SpotSimulator:
 
 
 # ============================================================================
-# 噪声添加函数
+# Noise Addition Functions
 # ============================================================================
 
 
@@ -620,28 +632,28 @@ def add_noise_to_spectrum(spectrum,
                           sigma=None,
                           seed=None):
     """
-    为光谱添加噪声
+    Add noise to spectrum
 
-    参数:
+    Parameters:
     -------
     spectrum : np.ndarray
-        输入光谱
+        Input spectrum
     noise_type : str
-        噪声类型：'poisson'（泊松噪声）、'gaussian'（高斯噪声）、'mixed'（混合）
+        Noise type: 'poisson' (Poisson noise), 'gaussian' (Gaussian noise), 'mixed' (Mixed)
     snr : float, optional
-        信噪比（dB）。若提供，自动计算 sigma。
+        Signal-to-noise ratio (dB). If provided, sigma is calculated automatically.
     snr_linear : float, optional
-        线性信噪比 (Signal/Noise)。例如 100 表示 S/N = 100。
-        若提供，优先级高于 snr (dB)。
+        Linear signal-to-noise ratio (Signal/Noise). E.g., 100 means S/N = 100.
+        If provided, priority is higher than snr (dB).
     sigma : float, optional
-        高斯噪声标准差。若提供，优先级最高。
+        Gaussian noise standard deviation. If provided, highest priority.
     seed : int, optional
-        随机数种子
+        Random number seed
 
-    返回:
+    Returns:
     -------
     np.ndarray
-        加噪后的光谱
+        Noisy spectrum
     """
     if seed is not None:
         np.random.seed(seed)
@@ -649,18 +661,19 @@ def add_noise_to_spectrum(spectrum,
     spectrum_noisy = spectrum.copy()
 
     if noise_type == 'poisson':
-        # 泊松噪声：假设光子计数
-        # 注意：泊松噪声通常需要知道真实的电子数/光子数，这里直接对归一化光谱做泊松可能不物理
-        # 除非 spectrum 已经是光子数
+        # Poisson noise: assumes photon counts
+        # Note: Poisson noise usually requires knowing the true electron/photon count,
+        # here applying Poisson directly to normalized spectrum might not be physical
+        # unless spectrum is already photon counts
         spectrum_noisy = np.random.poisson(spectrum)
 
     elif noise_type == 'gaussian':
         if sigma is None:
             signal_level = np.mean(np.abs(spectrum))
-            # 如果 spectrum 是 Stokes V/Q/U，均值可能接近 0，这时用 max(abs) 可能更合适
-            # 或者通常 S/N 是相对于连续谱强度定义的 (Ic=1)
-            if signal_level < 0.1:  # 可能是偏振谱
-                signal_level = 1.0  # 假设相对于连续谱定义噪声
+            # If spectrum is Stokes V/Q/U, mean might be close to 0, then max(abs) might be more appropriate
+            # Or usually S/N is defined relative to continuum intensity (Ic=1)
+            if signal_level < 0.1:  # Likely polarization spectrum
+                signal_level = 1.0  # Assume noise defined relative to continuum
 
             if snr_linear is not None:
                 sigma = float(signal_level / snr_linear)
@@ -674,7 +687,7 @@ def add_noise_to_spectrum(spectrum,
         spectrum_noisy = spectrum + noise
 
     elif noise_type == 'mixed':
-        # 混合：泊松 + 高斯
+        # Mixed: Poisson + Gaussian
         spectrum_poisson = np.random.poisson(spectrum)
 
         if sigma is None:
@@ -693,7 +706,7 @@ def add_noise_to_spectrum(spectrum,
         spectrum_noisy = spectrum_poisson + noise
 
     else:
-        raise ValueError(f"未知的噪声类型: {noise_type}")
+        raise ValueError(f"Unknown noise type: {noise_type}")
 
     return spectrum_noisy
 
@@ -705,38 +718,38 @@ def add_noise_to_results(results,
                          sigma=None,
                          seed=None):
     """
-    为多个 ForwardModelResult 对象添加噪声
+    Add noise to multiple ForwardModelResult objects
 
-    参数:
+    Parameters:
     -------
     results : List
-        结果列表（各为 ForwardModelResult）
+        List of results (each is ForwardModelResult)
     noise_type : str
-        噪声类型
+        Noise type
     snr : float, optional
-        信噪比（dB）
+        Signal-to-noise ratio (dB)
     snr_linear : float, optional
-        线性信噪比
+        Linear signal-to-noise ratio
     sigma : float, optional
-        标准差
+        Standard deviation
     seed : int, optional
-        随机数种子
+        Random number seed
 
-    返回:
+    Returns:
     -------
     List
-        加噪后的结果列表
+        List of noisy results
     """
     noisy_results = []
 
     for result in results:
-        # 对 Stokes I 使用 snr_linear 计算 sigma
-        # 对 Stokes V/Q/U 使用相同的 sigma (通常噪声水平是一样的)
+        # Use snr_linear to calculate sigma for Stokes I
+        # Use same sigma for Stokes V/Q/U (usually noise level is the same)
 
-        # 计算 sigma (如果未提供)
+        # Calculate sigma (if not provided)
         current_sigma = sigma
         if current_sigma is None:
-            # 假设连续谱强度为 1.0
+            # Assume continuum intensity is 1.0
             signal_ref = 1.0
             if snr_linear is not None:
                 current_sigma = signal_ref / snr_linear
@@ -750,7 +763,7 @@ def add_noise_to_results(results,
                                         sigma=current_sigma,
                                         seed=seed)
 
-        # 偏振分量使用相同的 sigma
+        # Polarization components use same sigma
         noisy_v = add_noise_to_spectrum(result.stokes_v,
                                         noise_type,
                                         sigma=current_sigma,
@@ -776,7 +789,7 @@ def add_noise_to_results(results,
             stokes_q=noisy_q,
             stokes_u=noisy_u,
             wavelength=result.wavelength,
-            error=current_sigma,  # 记录噪声水平
+            error=current_sigma,  # Record noise level
             hjd=result.hjd,
             phase_index=result.phase_index,
             pol_channel=result.pol_channel,
@@ -788,7 +801,7 @@ def add_noise_to_results(results,
 
 
 # ============================================================================
-# 便捷函数
+# Convenience Functions
 # ============================================================================
 
 
@@ -800,27 +813,27 @@ def create_simple_spot_simulator(nr: int = 40,
                                  r0_rot: float = 1.0,
                                  period_days: float = 1.0) -> SpotSimulator:
     """
-    快速创建SpotSimulator
+    Quickly create a SpotSimulator
 
-    参数:
+    Parameters:
     -------
     nr : int
-        环数
+        Number of rings
     r_in, r_out : float
-        径向范围
+        Radial range
     inclination_deg : float
-        倾角（度）
+        Inclination (degrees)
     pOmega : float
-        较差转动指数
+        Differential rotation index
     r0_rot : float
-        参考半径
+        Reference radius
     period_days : float
-        周期（天）
+        Period (days)
 
-    返回:
+    Returns:
     -------
     SpotSimulator
-        simulator对象
+        simulator object
     """
     grid = diskGrid(nr=nr, r_in=r_in, r_out=r_out)
     sim = SpotSimulator(grid,
@@ -832,7 +845,7 @@ def create_simple_spot_simulator(nr: int = 40,
 
 
 def create_test_spots() -> List[SpotConfig]:
-    """创建测试用的spot配置"""
+    """Create test spot configurations"""
     spots = [
         SpotConfig(r=1.5, phi=0.0, amplitude=2.0, B_los=1000.0),
         SpotConfig(r=2.0, phi=np.pi, amplitude=1.5, B_los=-500.0),

@@ -189,6 +189,33 @@ class IterationHistory:
                 f"IterationHistory checkpoint loaded from {filepath} "
                 f"({self.niter} iterations)")
 
+    def get_history(self) -> Dict[str, List[float]]:
+        """
+        获取历史数据的字典格式
+        
+        Returns
+        -------
+        Dict[str, List[float]]
+            包含 'chi2', 'entropy', 'regularization' 等键的列表字典
+        """
+        if not self.iterations:
+            return {}
+
+        history = {}
+        keys = [
+            'entropy', 'chisq', 'Q', 'grad_S_norm', 'grad_C_norm', 'alpha',
+            'param_delta'
+        ]
+
+        for k in keys:
+            history[k] = [it.get(k, 0.0) for it in self.iterations]
+
+        # Compatibility aliases
+        history['chi2'] = history['chisq']
+        history['regularization'] = history['Q']
+
+        return history
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # ProgressMonitor

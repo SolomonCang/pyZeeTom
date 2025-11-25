@@ -1,87 +1,89 @@
 #!/usr/bin/env python
 """Dynamic spectrum visualization tool.
 
-功能：
-1. 自适应搜索 .lsd, .s, .spec 等格式的光谱文件。
-2. 强制使用 SpecIO 读取光谱，支持全 Stokes 参数。
-3. 支持两种绘图模式：
-   - image: 动态谱（2D 颜色图）
-   - stacked: 堆叠折线图（Waterfall plot），按相位排列
-4. Stokes 显示逻辑：
-   - stokes='I': 单图显示 Stokes I
-   - stokes='V'/'Q'/'U': 双图显示，左侧 Stokes I，右侧 Stokes V/Q/U
+Features:
+1. Adaptive search for spectrum files in .lsd, .s, .spec formats.
+2. Force use of SpecIO to read spectra, supporting full Stokes parameters.
+3. Supports two plotting modes:
+   - image: Dynamic spectrum (2D colormap)
+   - stacked: Stacked line plot (Waterfall plot), arranged by phase
+4. Stokes display logic:
+   - stokes='I': Single plot showing Stokes I
+   - stokes='V'/'Q'/'U': Dual plots, left showing Stokes I, right showing Stokes V/Q/U
 """
 import sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-# 添加项目根目录到路径 (假设脚本位于 tools/ 或类似子目录)
+# Add project root to path (assuming script is in tools/ or similar subdirectory)
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
-# 引入自定义模块
+# Import custom modules
 from utils.dynamic_spectrum import IrregularDynamicSpectrum
 from core.mainFuncs import readParamsTomog, compute_phase_from_jd
 from core.SpecIO import loadObsProfile, ObservationProfile
 
 # ==============================================================================
-#                                 参数配置区域
+#                                 Configuration Area
 # ==============================================================================
 CONFIG = {
-    # --- 数据输入配置 ---
-    'params_file': 'input/params_spot_forward.txt',  # 参数文件路径
-    'model_dir': 'output/spot_forward',  # 光谱文件所在目录
-
-    # 指定文件列表 (可选)
-    # None: 自动搜索 (phase001.lsd, .s, .spec 等)
+    # --- Data Input Configuration ---
+    'params_file': 'input/params_inverse_test.txt',  # Parameter file path
+    # 'model_dir': 'output/inverse_test',  # Directory containing spectrum files
+    'model_dir': 'input/inSpec',
+    # Specify file list (optional)
+    # None: Auto search (phase001.lsd, .s, .spec etc.)
     'file_list': None,
 
-    # 选择显示的 Stokes 参数
-    # 'I': 只画 I
-    # 'V', 'Q', 'U': 画两张图，左边 I，右边 V/Q/U
+    # Select Stokes parameter to display
+    # 'I': Plot I only
+    # 'V', 'Q', 'U': Plot two panels, left I, right V/Q/U
     'stokes': 'V',
-    'file_type': 'auto',  # 传给 SpecIO 的文件类型提示
+    'file_type': 'auto',  # File type hint passed to SpecIO
 
-    # --- 绘图模式配置 ---
-    # 'image':   绘制动态谱（颜色图/热力图）
-    # 'stacked': 绘制堆叠折线图（所有谱线画在一张图上，按相位错开）
-    'plot_mode': 'image',
+    # --- Plotting Mode Configuration ---
+    # 'image':   Plot dynamic spectrum (colormap/heatmap)
+    # 'stacked': Plot stacked line plot (all spectra on one plot, offset by phase)
+    'plot_mode': 'stacked',
 
-    # --- 输出配置 ---
-    'out_file': None,  # 输出路径 (如 'plot.png')，None 则弹窗
+    # --- Output Configuration ---
+    'out_file': None,  # Output path (e.g. 'plot.png'), None for popup window
 
-    # --- 'image' 模式专用配置 ---
-    'cmap': 'RdBu_r',  # 颜色映射
-    'vmin': 0.98,  # Stokes I 的颜色下限
-    'vmax': 1.02,  # Stokes I 的颜色上限
-    # 偏振分量的颜色范围通常需要更小
+    # --- 'image' Mode Specific Configuration ---
+    'cmap': 'RdBu_r',  # Colormap
+    'vmin': 0.98,  # Color lower limit for Stokes I
+    'vmax': 1.02,  # Color upper limit for Stokes I
+    # Polarization component color range usually needs to be smaller
     'vmin_pol': -0.001,
     'vmax_pol': 0.001,
 
-    # --- 'stacked' 模式专用配置 ---
-    # 缩放系数：控制谱线起伏的高度。
-    # Stokes I 公式: Y = Phase + (Intensity - 1.0) * stack_scale
-    # Stokes P 公式: Y = Phase + Intensity * stack_scale * pol_scale_mult
+    # --- 'stacked' Mode Specific Configuration ---
+    # Scaling factor: Controls the height of spectral line fluctuations.
+    # Stokes I formula: Y = Phase + (Intensity - 1.0) * stack_scale
+    # Stokes P formula: Y = Phase + Intensity * stack_scale * pol_scale_mult
     'stack_scale': 1.0,
-    # 偏振分量的额外放大倍数 (V通常100, Q/U可能需要更大，如10000)
-    'pol_scale_mult': 10.0,
-    'line_color': 'black',  # 线条颜色
-    'line_width': 0.6,  # 线条宽度
+    # Extra magnification for polarization components (V usually 100, Q/U may need larger, e.g. 10000)
+    'pol_scale_mult': 1,
+    'line_color': 'black',  # Line color
+    'line_width': 0.6,  # Line width
 
-    # --- 数据处理配置 ---
-    'remove_baseline': False,  # 是否去除基线 (减去平均谱)
-    'align_continuum': True,  # 是否强制对齐连续谱 (将边缘对齐到 1.0)
+    # --- Data Processing Configuration ---
+    'remove_baseline':
+    False,  # Whether to remove baseline (subtract mean profile)
+    'align_continuum':
+    False,  # Whether to force align continuum (align edges to 1.0)
 }
 # ==============================================================================
 
 
 def find_file_for_index(base_dir, index):
-    """自适应搜索对应索引的光谱文件。"""
+    """Adaptive search for spectrum file corresponding to index."""
     base_dir = Path(base_dir)
 
-    # 定义可能的搜索模式 (glob patterns)
-    # 支持 3位或4位数字，支持文件名中有额外后缀
+    # Define possible search patterns (glob patterns)
+    # Supports 3 or 4 digit numbers, supports extra suffixes in filename
     patterns = [
         f"phase{index:03d}*",  # phase001...
         f"phase_{index:03d}*",  # phase_001...
@@ -92,21 +94,21 @@ def find_file_for_index(base_dir, index):
         f"{index:03d}*",  # 001...
     ]
 
-    # 可能的扩展名
+    # Possible extensions
     extensions = {'.lsd', '.s', '.spec', '.dat', '.txt'}
 
     for pattern in patterns:
-        # 使用 glob 搜索匹配前缀的文件
+        # Use glob to search for files matching prefix
         candidates = list(base_dir.glob(pattern))
 
-        # 过滤有效扩展名
+        # Filter valid extensions
         valid_candidates = [
             c for c in candidates
             if c.suffix.lower() in extensions and c.is_file()
         ]
 
         if valid_candidates:
-            # 如果找到，返回第一个（排序以保证确定性）
+            # If found, return the first one (sort to ensure determinism)
             valid_candidates.sort()
             return valid_candidates[0]
 
@@ -118,15 +120,15 @@ def load_model_spectra(model_dir,
                        file_list=None,
                        file_type='auto'):
     """
-    加载光谱数据。
+    Load spectrum data.
     
     Returns:
-        times (np.array): 相位数组
-        obs_list (list[ObservationProfile]): SpecIO 读取的光谱对象列表
+        times (np.array): Phase array
+        obs_list (list[ObservationProfile]): List of spectrum objects read by SpecIO
     """
     model_dir = Path(model_dir)
 
-    # 1. 读取参数文件获取相位信息
+    # 1. Read parameter file to get phase information
     if not Path(params_file).exists():
         raise FileNotFoundError(f"Params file not found: {params_file}")
 
@@ -138,7 +140,7 @@ def load_model_spectra(model_dir,
     print(f"  Params info: {num_obs} observations")
     print(f"  Phase range: {phases[0]:.3f} - {phases[-1]:.3f}")
 
-    # 2. 准备文件列表
+    # 2. Prepare file list
     target_files = []
     if file_list is not None:
         limit = min(len(file_list), num_obs)
@@ -154,7 +156,7 @@ def load_model_spectra(model_dir,
                 )
             target_files.append(f_path)
 
-    # 3. 使用 SpecIO 读取数据
+    # 3. Use SpecIO to read data
     times = []
     obs_list = []
 
@@ -164,9 +166,9 @@ def load_model_spectra(model_dir,
             print(f"  Warning: File does not exist: {f_path}")
             continue
 
-        # 强制使用 SpecIO 读取
+        # Force use of SpecIO to read
         try:
-            # 注意：loadObsProfile 会自动处理 I, V, Q, U 列
+            # Note: loadObsProfile automatically handles I, V, Q, U columns
             obs = loadObsProfile(str(f_path), file_type=file_type)
         except Exception as e:
             print(f"  Error loading {f_path.name}: {e}")
@@ -181,7 +183,7 @@ def load_model_spectra(model_dir,
     if len(times) == 0:
         raise FileNotFoundError("No valid spectra loaded.")
 
-    # 按相位排序
+    # Sort by phase
     order = np.argsort(times)
     sorted_times = np.array([times[i] for i in order])
     sorted_obs = [obs_list[i] for i in order]
@@ -190,7 +192,7 @@ def load_model_spectra(model_dir,
 
 
 def get_stokes_data(obs_list, stokes_char):
-    """从 obs_list 中提取特定的 Stokes 分量数组列表。"""
+    """Extract specific Stokes component array list from obs_list."""
     data_list = []
     stokes_char = stokes_char.upper()
 
@@ -207,17 +209,18 @@ def get_stokes_data(obs_list, stokes_char):
             data_list.append(
                 obs.specU if obs.hasU else np.zeros_like(obs.specI))
         else:
-            # 默认回退到 I
+            # Default fallback to I
             data_list.append(obs.specI)
     return data_list
 
 
 def main():
-    # 从 CONFIG 读取
+    # Read from CONFIG
     params_file = CONFIG['params_file']
     model_dir = CONFIG['model_dir']
     file_list = CONFIG['file_list']
-    stokes_cfg = CONFIG['stokes'].upper()  # 用户配置的 Stokes ('I', 'V', 'Q', 'U')
+    stokes_cfg = CONFIG['stokes'].upper(
+    )  # User configured Stokes ('I', 'V', 'Q', 'U')
     plot_mode = CONFIG['plot_mode']
     out_file = CONFIG['out_file']
     remove_baseline = CONFIG['remove_baseline']
@@ -234,18 +237,18 @@ def main():
         print(f"✗ Error: {e}")
         return 1
 
-    # 提取波长/速度轴 (假设所有文件网格一致，取第一个)
+    # Extract wavelength/velocity axis (assume all files have consistent grid, take first one)
     xs_list = [obs.wl for obs in obs_list]
     x_sample = xs_list[0]
 
-    # 自动判断 X 轴标签
+    # Auto-determine X axis label
     if np.mean(x_sample) < 2000:
         xlabel = 'Velocity (km/s)' if np.max(
             np.abs(x_sample)) < 1000 else 'Wavelength (nm)'
     else:
         xlabel = 'Wavelength (Å)'
 
-    # 准备数据：总是需要 I，如果 stokes_cfg 不是 I，还需要 Pol
+    # Prepare data: Always need I, if stokes_cfg is not I, also need Pol
     intensities_I = get_stokes_data(obs_list, 'I')
     intensities_Pol = None
 
@@ -264,25 +267,25 @@ def main():
             )
             CONFIG['pol_scale_mult'] = suggested_mult
 
-    # 去基线处理 (减去平均谱)
+    # Remove baseline (subtract mean profile)
     if remove_baseline:
         print("Removing baseline (subtracting mean profile)...")
-        # 处理 I
+        # Process I
         mean_I = np.mean(intensities_I, axis=0)
         intensities_I = [spec - mean_I + 1.0
-                         for spec in intensities_I]  # I 保持在 1.0 附近
+                         for spec in intensities_I]  # Keep I around 1.0
 
-        # 处理 Pol (如果存在)
+        # Process Pol (if exists)
         if intensities_Pol is not None:
             mean_Pol = np.mean(intensities_Pol, axis=0)
-            intensities_Pol = [spec - mean_Pol
-                               for spec in intensities_Pol]  # Pol 保持在 0.0 附近
+            intensities_Pol = [spec - mean_Pol for spec in intensities_Pol
+                               ]  # Keep Pol around 0.0
 
-    # 连续谱对齐 (强制边缘为 1.0)
+    # Continuum alignment (force edges to 1.0)
     if CONFIG.get('align_continuum', False) and not remove_baseline:
         print("Aligning continuum (shifting edges to 1.0)...")
-        # 计算每个谱的边缘均值 (取前5个和后5个点)
-        # 假设边缘是连续谱
+        # Calculate edge mean for each spectrum (take first 5 and last 5 points)
+        # Assume edges are continuum
         new_I = []
         for spec in intensities_I:
             edge_val = (np.mean(spec[:5]) + np.mean(spec[-5:])) / 2.0
@@ -291,10 +294,10 @@ def main():
         intensities_I = new_I
 
     # ==========================================================================
-    # 绘图初始化
+    # Plot Initialization
     # ==========================================================================
-    # 如果是 I，一张图；如果是 V/Q/U，两张图 (1行2列)
-    # 恢复 sharey=True 以保证相位对齐
+    # If I, one plot; if V/Q/U, two plots (1 row 2 columns)
+    # Restore sharey=True to ensure phase alignment
     if stokes_cfg == 'I':
         fig, ax_main = plt.subplots(figsize=(6, 10))
         axes = [ax_main]
@@ -307,32 +310,32 @@ def main():
     scale = CONFIG['stack_scale']
 
     # ==========================================================================
-    # 循环绘制每个子图 (左图 I, 右图 Pol)
+    # Loop to plot each subplot (Left I, Right Pol)
     # ==========================================================================
     for ax_idx, ax in enumerate(axes):
         label, current_intensities = data_pairs[ax_idx]
 
-        # --- 模式 1: Dynamic Spectrum (Image) ---
+        # --- Mode 1: Dynamic Spectrum (Image) ---
         if plot_mode == 'image':
-            # 动态谱需要规则网格处理，这里调用工具类
+            # Dynamic spectrum requires regular grid handling, calling utility class here
             dynspec = IrregularDynamicSpectrum(times, xs_list,
                                                current_intensities)
 
-            # 颜色范围区分
+            # Color range distinction
             if label == 'I':
                 vmin, vmax = CONFIG['vmin'], CONFIG['vmax']
                 cmap = CONFIG['cmap']
             else:
                 vmin, vmax = CONFIG['vmin_pol'], CONFIG['vmax_pol']
-                cmap = 'RdBu_r'  # 偏振通常用红蓝
+                cmap = 'RdBu_r'  # Polarization usually uses Red-Blue
 
-            # 注意：IrregularDynamicSpectrum.plot 会创建新 figure，这里我们需要手动画在 ax 上
-            # 我们直接使用 pcolormesh
-            # 简单起见，假设网格一致，构建 2D 数组
+            # Note: IrregularDynamicSpectrum.plot creates a new figure, here we need to manually plot on ax
+            # We use pcolormesh directly
+            # For simplicity, assume consistent grid, build 2D array
             img_data = np.array(current_intensities)
             # img_data shape: (n_phases, n_pixels)
 
-            # 构造网格
+            # Construct grid
             X, Y = np.meshgrid(x_sample, times)
 
             im = ax.pcolormesh(X,
@@ -347,7 +350,7 @@ def main():
 
             ax.set_title(f'Dynamic Spectrum (Stokes {label})')
 
-        # --- 模式 2: Stacked Lines (Waterfall) ---
+        # --- Mode 2: Stacked Lines (Waterfall) ---
         elif plot_mode == 'stacked':
             line_color = CONFIG['line_color']
             lw = CONFIG['line_width']
@@ -360,16 +363,16 @@ def main():
                 x = xs_list[i]
                 y = current_intensities[i]
 
-                # 核心公式
+                # Core formula
                 if label == 'I':
-                    # Stokes I 通常归一化为 1，减 1 后在 0 附近波动，然后叠加相位
+                    # Stokes I is usually normalized to 1, subtract 1 to fluctuate around 0, then add phase
                     y_plot = phase + (y - 1.0) * scale
                 else:
-                    # Stokes V/Q/U 通常在 0 附近波动，直接叠加
+                    # Stokes V/Q/U usually fluctuate around 0, add directly
                     pol_mult = CONFIG.get('pol_scale_mult', 100.0)
                     y_plot = phase + (y) * pol_mult * scale
 
-                # 更新数据范围
+                # Update data range
                 if len(y_plot) > 0:
                     y_data_min = min(y_data_min, np.min(y_plot))
                     y_data_max = max(y_data_max, np.max(y_plot))
@@ -378,12 +381,12 @@ def main():
 
             ax.set_title(f'Stacked (Stokes {label}, Scale={scale})')
 
-            # 动态设置 Y 轴范围
-            # 基础范围是相位范围
+            # Dynamically set Y axis range
+            # Base range is phase range
             base_min = times[0] - 0.05
             base_max = times[-1] + 0.05
 
-            # 结合数据范围 (防止数据超出视野)
+            # Combine data range (prevent data from going out of view)
             if np.isfinite(y_data_min) and np.isfinite(y_data_max):
                 final_min = min(base_min, y_data_min - 0.05)
                 final_max = max(base_max, y_data_max + 0.05)
@@ -393,14 +396,14 @@ def main():
             ax.set_ylim(final_min, final_max)
             ax.set_xlim(x_sample[0], x_sample[-1])
 
-        # 公共轴标签
+        # Common axis labels
         ax.set_xlabel(xlabel)
         if ax_idx == 0:
             ax.set_ylabel('Rotation Phase')
 
     plt.tight_layout()
 
-    # 输出或显示
+    # Output or show
     if out_file:
         plt.savefig(out_file, dpi=150, bbox_inches='tight')
         print(f"✓ Saved image to: {out_file}")

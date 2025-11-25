@@ -1,5 +1,5 @@
 # grid_tom.py
-# 等Δr分层的平面盘网格（每环宽度一致），允许每环像素数不一致
+# Equal Δr stratified planar disk grid (constant width per ring), allowing variable number of pixels per ring
 
 import numpy as np
 from math import pi
@@ -22,20 +22,21 @@ class diskGrid:
         self.phi_max = float(phi_max)
 
         if not (self.r_out > self.r_in):
-            raise ValueError("r_out 必须大于 r_in")
+            raise ValueError("r_out must be greater than r_in")
 
-        # 等 r 分箱（每环宽度一致）
+        # Equal r binning (constant width per ring)
         r_edges = np.linspace(self.r_in, self.r_out, self.nr + 1)
         self.r_edges = r_edges
         self.r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
-        self.dr = (r_edges[1:] - r_edges[:-1])  # 每环的Δr（常数，但保留数组形式）
+        self.dr = (r_edges[1:] - r_edges[:-1]
+                   )  # Δr for each ring (constant, but kept as array)
         dr_const = self.dr[0]
 
-        # 每环真实面积（极坐标环带面积）可由像素面积之和严格重构，无需单独存储
+        # The true area of each ring (polar annulus area) can be strictly reconstructed from the sum of pixel areas, no need to store separately
 
-        # 决定每环的 nphi（允许不一致）
+        # Determine nphi for each ring (can be variable)
         if target_pixels_per_ring is None:
-            # 近似等面积像素：nφ_i 使 r_i*Δr*Δφ ~ 常数 => nφ_i ∝ r_i
+            # Approximate equal area pixels: nφ_i makes r_i*Δr*Δφ ~ constant => nφ_i ∝ r_i
             nphi_ref = max(8, 2 * self.nr)
             r_mid = np.median(self.r_centers) if self.nr > 0 else 1.0
             nphi_list = np.clip(
@@ -53,10 +54,11 @@ class diskGrid:
             else:
                 nphi_arr = np.asarray(target_pixels_per_ring, dtype=int)
                 if nphi_arr.shape[0] != self.nr:
-                    raise ValueError("target_pixels_per_ring 长度必须等于 nr")
+                    raise ValueError(
+                        "target_pixels_per_ring length must equal nr")
                 nphi_list = np.maximum(1, nphi_arr)
 
-        # 展开像素属性（全部用一维数组，避免零维）
+        # Expand pixel attributes (all use 1D arrays, avoid zero-dimensional)
         rs, phis, drs, dphis, areas, ring_ids, phi_ids = [], [], [], [], [], [], []
         phi_span = (self.phi_max - self.phi_min)
         for i in range(self.nr):
@@ -110,56 +112,56 @@ class diskGrid:
         return r_in, r_out, phi_in, phi_out
 
     def rotate_to_phase(self, phase, pOmega=0.0, r0=1.0, period=1.0):
-        """根据相位和差速转动参数，更新像素的方位角
+        """Update pixel azimuth based on phase and differential rotation parameters
         
-        适用于时间演化场景：每个观测时刻，盘面结构随差速转动而变化。
+        Suitable for time evolution scenarios: disk structure changes due to differential rotation at each observation time.
         
         Parameters
         ----------
         phase : float
-            观测相位，phase = (JD - JD0) / period，表示从参考时刻经过的转动周期数
+            Observation phase, phase = (JD - JD0) / period, representing the number of rotation periods since the reference time
         pOmega : float, optional
-            差速转动幂律指数，Ω(r) = Ω_ref × (r/r0)^pOmega
-            - pOmega = 0.0  : 刚体转动（默认）
-            - pOmega = -0.5 : 开普勒型（类太阳盘）
-            - pOmega = -1.0 : 恒定角动量
+            Differential rotation power law index, Ω(r) = Ω_ref × (r/r0)^pOmega
+            - pOmega = 0.0  : Rigid body rotation (default)
+            - pOmega = -0.5 : Keplerian (solar-like disk)
+            - pOmega = -1.0 : Constant angular momentum
         r0 : float, optional
-            参考半径，默认 1.0（通常取星球半径）
+            Reference radius, default 1.0 (usually planet radius)
         period : float, optional
-            参考半径处的转动周期（天），默认 1.0
+            Rotation period at reference radius (days), default 1.0
             
         Returns
         -------
         phi_new : ndarray
-            更新后的方位角（弧度），shape = (numPoints,)
+            Updated azimuth (radians), shape = (numPoints,)
             
         Notes
         -----
-        - 刚体转动（pOmega=0）：所有环以相同角速度 Ω_ref 转动，
-          Δφ = 2π × phase（与半径无关）
-        - 差速转动（pOmega≠0）：每环角速度 Ω(r) = Ω_ref × (r/r0)^pOmega，
+        - Rigid body rotation (pOmega=0): All rings rotate with same angular velocity Ω_ref,
+          Δφ = 2π × phase (independent of radius)
+        - Differential rotation (pOmega≠0): Angular velocity per ring Ω(r) = Ω_ref × (r/r0)^pOmega,
           Δφ(r) = 2π × phase × (r/r0)^pOmega
-        - 本方法不修改 self.phi，而是返回新的方位角数组，便于每个观测独立计算
+        - This method does not modify self.phi, but returns a new azimuth array for independent calculation per observation
         """
         phase = float(phase)
         pOmega = float(pOmega)
         r0 = float(max(r0, 1e-30))
         period = float(period)
 
-        # 计算每个像素的角位移
+        # Calculate angular displacement for each pixel
         if abs(pOmega) < 1e-12:
-            # 刚体转动：所有环转动相同角度
+            # Rigid body rotation: all rings rotate by same angle
             delta_phi = 2.0 * np.pi * phase
         else:
-            # 差速转动：每环转动角度与半径相关
+            # Differential rotation: rotation angle depends on radius
             # Ω(r) = Ω_ref × (r/r0)^pOmega
             # Δφ(r) = Ω(r) × Δt = Ω_ref × (r/r0)^pOmega × (phase × period)
-            # 而 Ω_ref × period = 2π（参考半径处一个周期转动 2π）
-            # 因此 Δφ(r) = 2π × phase × (r/r0)^pOmega
+            # And Ω_ref × period = 2π (one period rotation at reference radius is 2π)
+            # Therefore Δφ(r) = 2π × phase × (r/r0)^pOmega
             r_ratio = self.r / r0
             delta_phi = 2.0 * np.pi * phase * np.power(r_ratio, pOmega)
 
-        # 更新方位角（周期性边界条件）
+        # Update azimuth (periodic boundary condition)
         phi_new = (self.phi + delta_phi) % (2.0 * np.pi)
         return phi_new
 
@@ -168,42 +170,42 @@ class diskGrid:
                                          inclination_deg,
                                          stellar_radius=1.0,
                                          verbose=0):
-        """计算恒星遮挡mask（无限薄赤道盘，光学薄）
+        """Calculate stellar occultation mask (infinitely thin equatorial disk, optically thin)
         
         Parameters
         ----------
         phi_obs : float
-            观察者方向（弧度），观察者从这个方位角看向恒星中心
-            phi_obs=0 表示从"上方"（+x方向）观测
+            Observer direction (radians), observer looks towards star center from this azimuth
+            phi_obs=0 means observing from "above" (+x direction)
         inclination_deg : float
-            倾角（度），i=0为face-on（从极点看），i=90为edge-on（从赤道面看）
+            Inclination (degrees), i=0 is face-on (pole-on), i=90 is edge-on (equator-on)
         stellar_radius : float, optional
-            恒星半径（与盘面半径相同单位），默认1.0
+            Stellar radius (same unit as disk radius), default 1.0
         verbose : int, optional
-            是否输出调试信息
+            Whether to print debug info
             
         Returns
         -------
         mask : ndarray (bool)
-            遮挡mask，shape = (numPoints,)
-            True = 被恒星遮挡，False = 可见
+            Occultation mask, shape = (numPoints,)
+            True = Occulted by star, False = Visible
             
         Notes
         -----
-        物理模型：
-        - 盘为无限薄，位于赤道面（z=0）
-        - 恒星为半径 R* 的球体，中心在原点
-        - 观测者方向固定，从 phi_obs 方向看过来
-        - 遮挡mask只依赖于几何参数（phi_obs, inclination, R*），不随时间变化
+        Physical model:
+        - Disk is infinitely thin, located at equatorial plane (z=0)
+        - Star is a sphere of radius R* centered at origin
+        - Observer direction is fixed, looking from phi_obs direction
+        - Occultation mask depends only on geometric parameters (phi_obs, inclination, R*), not time-varying
         
-        坐标系约定：
-        - 盘面坐标系：(r, φ) 柱坐标，z=0 平面
-        - 观察者视线：从 (x, y) = (cos(phi_obs), sin(phi_obs)) 方向看向原点
-        - 倾角：视线与z轴的夹角
+        Coordinate system convention:
+        - Disk coordinate system: (r, φ) cylindrical coordinates, z=0 plane
+        - Observer line of sight: Looking towards origin from (x, y) = (cos(phi_obs), sin(phi_obs)) direction
+        - Inclination: Angle between line of sight and z-axis
         
-        遮挡判据：
-        - 将像素位置投影到垂直于视线的平面上
-        - 若投影距离 < R*，且像素在恒星后方（沿视线方向），则被遮挡
+        Occultation criterion:
+        - Project pixel position onto plane perpendicular to line of sight
+        - If projected distance < R*, and pixel is behind star (along line of sight), then it is occulted
         """
         if self.numPoints == 0:
             return np.array([], dtype=bool)
@@ -212,32 +214,32 @@ class diskGrid:
         phi_obs = float(phi_obs)
         R_star = float(stellar_radius)
 
-        # 像素笛卡尔坐标（盘面坐标系，z=0）
+        # Pixel Cartesian coordinates (disk coordinate system, z=0)
         x_disk = self.r * np.cos(self.phi)
         y_disk = self.r * np.sin(self.phi)
-        z_disk = np.zeros_like(self.r)  # 无限薄盘
+        z_disk = np.zeros_like(self.r)  # Infinitely thin disk
 
-        # 观察者视线方向单位矢量（从远处指向恒星中心）
-        # 视线在 x-y 平面的投影沿 phi_obs 方向，与 z 轴夹角为 inclination
+        # Observer line of sight unit vector (pointing from far away to star center)
+        # Line of sight projection on x-y plane is along phi_obs direction, angle with z axis is inclination
         sin_i = np.sin(inclination_rad)
         cos_i = np.cos(inclination_rad)
 
-        # 视线方向: n_obs = (sin_i * cos(phi_obs), sin_i * sin(phi_obs), cos_i)
-        # 观察者坐标系：视线沿 -z' 轴，需要坐标变换
+        # Line of sight: n_obs = (sin_i * cos(phi_obs), sin_i * sin(phi_obs), cos_i)
+        # Observer coordinate system: Line of sight along -z' axis, coordinate transformation needed
 
-        # 方法：计算像素沿视线方向的距离（正=远离观察者，负=靠近观察者）
-        # 距离 = r_pixel · n_obs
+        # Method: Calculate pixel distance along line of sight (positive = away from observer, negative = towards observer)
+        # Distance = r_pixel · n_obs
         dist_along_view = (x_disk * sin_i * np.cos(phi_obs) +
                            y_disk * sin_i * np.sin(phi_obs) + z_disk * cos_i)
 
-        # 像素到视线的垂直距离（投影距离）
+        # Perpendicular distance from pixel to line of sight (projected distance)
         # r_perp^2 = |r_pixel|^2 - (r_pixel · n_obs)^2
         r_pixel_sq = x_disk**2 + y_disk**2 + z_disk**2
         r_perp = np.sqrt(np.maximum(0.0, r_pixel_sq - dist_along_view**2))
 
-        # 遮挡判据：
-        # 1. 垂直距离 < R*（在恒星投影圆盘内）
-        # 2. dist_along_view < 0（在恒星后方，相对观察者）
+        # Occultation criterion:
+        # 1. Perpendicular distance < R* (within star projected disk)
+        # 2. dist_along_view < 0 (behind star, relative to observer)
         mask = (r_perp < R_star) & (dist_along_view < 0)
 
         if verbose:
@@ -276,7 +278,7 @@ def visualize_grid(nr=60,
                    show=True,
                    return_fig=False):
     """
-    color_mode: 'ring'（按环号着色）或 'area'（按像素面积着色）
+    color_mode: 'ring' (color by ring index) or 'area' (color by pixel area)
     """
     import importlib
     try:

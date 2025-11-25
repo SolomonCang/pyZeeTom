@@ -42,42 +42,41 @@ C  1.0  0
 # Note: Legacy initMagFromFile/initBrightFromFile (old #6/#9 lines) are deprecated
 1  output/spot_forward/spot_model_phase_0p00.tomog
 
-#7 fitBri  chiScaleI  brightEntScale
-0  1.0  1.0
+#7 fitBri fitMag fitBlos fitBperp fitChi
+# Control fitting switches (0=off, 1=on)
+1 1 1 1 1
 
-#8 fEntropyBright  defaultBright  maximumBright
-1  1.0  2.0
-
-#9 (deprecated - line ignored for backward compatibility)
-# Legacy: was initBrightFromFile initBrightFile
-# Now merged into #6 initTomogFile
-# Kept here as placeholder to maintain line numbering
-0
-
-#10 estimateStrenght (legacy line strength fitting flag)
-0
-
-#11 spectralResolution  lineParamFile
+#8 spectralResolution  lineParamFile
 # spectralResolution: spectrograph resolution (e.g., 65000), will compute FWHM = c/R (km/s)
 # lineParamFile: path to line parameters file (format: wl0 sigWl g)
 65000  input/lines.txt
 
-#12 velStart  velEnd  obsFileType  specType
+#9 velStart  velEnd  obsFileType  specType
 # obsFileType: observation file format hint (lsd_i, lsd_pol, spec_i, spec_pol, auto)
 # specType: data domain (auto=auto-detect, spec=wavelength domain, lsd=velocity domain)
 #   When specType=auto, SpecIO will automatically determine format and domain
--300.0  300.0  spec_pol  specType=spec
+-300.0  300.0  spec_pol  specType=auto-detect
 
-#13 jDateRef  (HJD0, reference epoch for phase calculation: phase = (HJD - HJD0) / period)
+#10 jDateRef  (HJD0, reference epoch for phase calculation: phase = (HJD - HJD0) / period)
 0.5
 
-#14+ observation entries: filename  HJD  velR  [polchannel]
+#11+ observation entries: filename  HJD  velR  [polchannel]
 # polchannel: I/V/Q/U (optional, default=V)
 #   I: Intensity only (output spec_i or lsd_i format, 3 columns)
 #   V/Q/U: Polarization (output spec_pol or lsd_pol format with specified Stokes component)
 # Example for 5 phases over 1 rotation period (0-1 day):
-input/inSpec/obs_phase_00.spec  0.20  0.0  I
-input/inSpec/obs_phase_01.spec  0.40  0.0  V
-input/inSpec/obs_phase_02.spec  0.60  0.0  Q
-input/inSpec/obs_phase_03.spec  0.80  0.0  U
-input/inSpec/obs_phase_04.spec  1.00  0.0  V
+input/inSpec/phase_0014_HJD2450000p980_VRp0p00_V.spec 2450000.00000 0.0 V
+input/inSpec/phase_0013_HJD2450000p920_VRp0p00_V.spec 2450000.05000 0.0 V
+input/inSpec/phase_0011_HJD2450000p800_VRp0p00_V.spec 2450000.12000 0.0 V
+input/inSpec/phase_0012_HJD2450000p880_VRp0p00_V.spec 2450000.18000 0.0 V
+input/inSpec/phase_0009_HJD2450000p650_VRp0p00_V.spec 2450000.25000 0.0 V
+input/inSpec/phase_0010_HJD2450000p720_VRp0p00_V.spec 2450000.33000 0.0 V
+input/inSpec/phase_0008_HJD2450000p550_VRp0p00_V.spec 2450000.41000 0.0 V
+input/inSpec/phase_0007_HJD2450000p480_VRp0p00_V.spec 2450000.48000 0.0 V
+input/inSpec/phase_0005_HJD2450000p330_VRp0p00_V.spec 2450000.55000 0.0 V
+input/inSpec/phase_0006_HJD2450000p410_VRp0p00_V.spec 2450000.65000 0.0 V
+input/inSpec/phase_0003_HJD2450000p180_VRp0p00_V.spec 2450000.72000 0.0 V
+input/inSpec/phase_0004_HJD2450000p250_VRp0p00_V.spec 2450000.80000 0.0 V
+input/inSpec/phase_0002_HJD2450000p120_VRp0p00_V.spec 2450000.88000 0.0 V
+input/inSpec/phase_0001_HJD2450000p050_VRp0p00_V.spec 2450000.92000 0.0 V
+input/inSpec/phase_0000_HJD2450000p000_VRp0p00_V.spec 2450000.98000 0.0 V

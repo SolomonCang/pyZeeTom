@@ -1,8 +1,8 @@
 """
-动态光谱工具类
---------------
-提供不规则时间采样的动态光谱可视化功能
-基于 tinyTools/Dynamic_spec.py 的 IrregularDynamicSpectrum 类
+Dynamic Spectrum Tool Class
+---------------------------
+Provides visualization functionality for dynamic spectra with irregular time sampling
+Based on IrregularDynamicSpectrum class from tinyTools/Dynamic_spec.py
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,9 +12,9 @@ from scipy.ndimage import gaussian_filter1d
 
 class IrregularDynamicSpectrum:
     """
-    不规则时间采样的动态光谱类
+    Irregular Time Sampling Dynamic Spectrum Class
     
-    用于处理和可视化时间不均匀分布的光谱序列
+    Used for processing and visualizing spectrum sequences with uneven time distribution
     """
 
     def __init__(self, times: np.ndarray, xs: list, intensities: list):
@@ -22,11 +22,11 @@ class IrregularDynamicSpectrum:
         Parameters
         ----------
         times : np.ndarray, shape (N,)
-            不均匀的观测时间点，必须升序
+            Uneven observation time points, must be ascending
         xs : list of np.ndarray
-            长度 = N，每项是该时刻的横坐标 array (Mi,)
+            Length = N, each item is the x-coordinate array (Mi,) for that moment
         intensities : list of np.ndarray
-            长度 = N，每项是对应强度 array (Mi,)
+            Length = N, each item is the corresponding intensity array (Mi,)
         """
         assert len(times) == len(xs) == len(intensities)
         self.times = np.array(times, dtype=float)
@@ -48,28 +48,28 @@ class IrregularDynamicSpectrum:
              xlabel='Velocity (km/s)',
              ylabel='Phase'):
         """
-        绘制不规则动态谱。
+        Plot irregular dynamic spectrum.
 
         Parameters
         ----------
         xlim, ylim : tuple or None
-            坐标轴范围
+            Axis limits
         cmap : str
-            色标名称
+            Colormap name
         vmin, vmax : float or None
-            色标范围
+            Colormap range
         log_scale : bool
-            是否使用对数色标
+            Whether to use logarithmic colormap
         gap_thresh : float or None
-            相邻观测若 dt > gap_thresh，则留白
+            If adjacent observations have dt > gap_thresh, leave blank
         gap_color : str
-            留白区域颜色
+            Color for blank areas
         title : str
-            图题
+            Plot title
         time_widths : None | float | array-like
-            每条谱带的时间宽度；None 时自动按相邻时间差计算
+            Time width for each spectrum strip; if None, calculated automatically from adjacent time differences
         xlabel, ylabel : str
-            坐标轴标签
+            Axis labels
             
         Returns
         -------
@@ -81,9 +81,9 @@ class IrregularDynamicSpectrum:
         times = self.times
         N = self.N
 
-        # 1) 计算每条谱带的高度 dt
+        # 1) Calculate height dt for each spectrum strip
         if time_widths is None:
-            # 自动按相邻时间差
+            # Automatically based on adjacent time differences
             dt = np.zeros(N)
             if N == 1:
                 dt[0] = 1.0
@@ -93,21 +93,23 @@ class IrregularDynamicSpectrum:
                 if N > 2:
                     dt[1:-1] = (times[2:] - times[:-2]) / 2
         else:
-            # 用户指定
+            # User specified
             if np.isscalar(time_widths):
                 dt = np.full(N, float(time_widths))
             else:
                 dt = np.array(time_widths, dtype=float)
                 if dt.shape[0] != N:
-                    raise ValueError(f"time_widths 长度应为 {N}，但得到 {dt.shape[0]}")
+                    raise ValueError(
+                        f"time_widths length should be {N}, but got {dt.shape[0]}"
+                    )
 
         # 2) colormap / norm
         norm = LogNorm(vmin=vmin, vmax=vmax) if log_scale else None
         last_mesh = None
 
-        # 3) 逐条绘制
+        # 3) Plot strip by strip
         for i, t in enumerate(times):
-            # 跳过大 gap
+            # Skip large gaps
             if i > 0 and gap_thresh is not None and (
                     times[i] - times[i - 1]) > gap_thresh:
                 continue
@@ -116,7 +118,7 @@ class IrregularDynamicSpectrum:
             I = self.Is[i]
             M = x.size
 
-            # 3.1) x 边界
+            # 3.1) x boundaries
             if M > 1:
                 dx = np.diff(x)
                 x_edges = np.empty(M + 1, dtype=float)
@@ -127,7 +129,7 @@ class IrregularDynamicSpectrum:
                 w = 0.5
                 x_edges = np.array([x[0] - w / 2, x[0] + w / 2])
 
-            # 3.2) y 边界
+            # 3.2) y boundaries
             half = dt[i] / 2
             y0 = t - half
             y1 = t + half
@@ -146,7 +148,7 @@ class IrregularDynamicSpectrum:
                                  shading='flat')
             last_mesh = mesh
 
-        # 4) 坐标与色标
+        # 4) Axes and Colorbar
         if xlim is not None:
             ax.set_xlim(xlim)
         if ylim is not None:
@@ -166,22 +168,22 @@ class IrregularDynamicSpectrum:
                         n_common=500,
                         smooth_sigma=None):
         """
-        全谱统一基线去除：
-        1) （可选）对每条谱做 1D 高斯平滑
-        2) 插值到共同横坐标 x_common
-        3) 计算全体谱在 x_common 上的基线
-        4) 插值回各自原始 x 并减去
+        Global baseline removal:
+        1) (Optional) 1D Gaussian smoothing for each spectrum
+        2) Interpolate to common x-coordinate x_common
+        3) Calculate baseline of all spectra on x_common
+        4) Interpolate back to original x and subtract
 
         Parameters
         ----------
         method : str
-            'median' 或 'mean'
+            'median' or 'mean'
         x_common : array-like or None
-            统一网格；None 时自动从所有谱的 x 范围按 n_common 等分生成
+            Common grid; if None, generated by dividing x range of all spectra into n_common parts
         n_common : int
-            若 x_common=None，则生成 n_common 点
+            If x_common=None, generate n_common points
         smooth_sigma : float or None
-            若不为 None，则对每条谱先做 gaussian_filter1d（沿 x 方向）
+            If not None, apply gaussian_filter1d (along x direction) to each spectrum first
         """
         xs_source = getattr(self, "xs_proc", self.xs)
         Is_source = getattr(self, "Is_proc", self.Is)
@@ -210,7 +212,7 @@ class IrregularDynamicSpectrum:
         else:
             raise ValueError("method must be 'median' or 'mean'")
 
-        # 更新强度数据
+        # Update intensity data
         for idx, (x, I) in enumerate(zip(xs_source, Is_source)):
             b_i = np.interp(x, x_common, baseline_common)
             self.Is[idx] = np.asarray(self.Is[idx], dtype=float) - b_i

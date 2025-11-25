@@ -30,31 +30,31 @@ class SimConfig:
     PERIOD = 1.0  # days
     P_OMEGA = -0.05  # differential rotation
     RADIUS = 0.8  # stellar radius (arbitrary units, used as r0)
-    R_OUT = 4.0  # disk outer radius (Restored to 2.0)
-    N_RINGS = 80  # grid resolution
+    R_OUT = 3.0  # disk outer radius (Restored to 2.0)
+    N_RINGS = 10  # grid resolution
 
     # --- Spot 1 (High latitude) ---
     SPOT1_R_FACTOR = 1.5  # Multiplier for RADIUS -> r=0.88
     SPOT1_PHI = 30.0  # degrees
-    SPOT1_AMP = 1.2
+    SPOT1_AMP = 4.2
     SPOT1_SIZE = 0.2  # Slightly smaller for sharper peaks
     SPOT1_BLOS = 500.0  # Increased field
     SPOT1_BPERP = 0.0
     SPOT1_CHI = 45.0  # degrees
 
     # --- Spot 2 (Equatorial) ---
-    SPOT2_R_FACTOR = 3.3  # Multiplier for RADIUS -> r=1.04
+    SPOT2_R_FACTOR = 0.8  # Multiplier for RADIUS -> r=1.04
     SPOT2_PHI = 100.0  # degrees (Changed from 150 to avoid overlap with Spot 1)
-    SPOT2_AMP = 2.5
+    SPOT2_AMP = 5.5
     SPOT2_SIZE = 0.2
     SPOT2_BLOS = -300.0  # Increased field
     SPOT2_BPERP = 0.0
     SPOT2_CHI = 90.0  # degrees
 
     # --- Spot 3 (Far disk) ---
-    SPOT3_R_FACTOR = 4.4  # Multiplier for RADIUS -> r=1.44
+    SPOT3_R_FACTOR = 2  # Multiplier for RADIUS -> r=1.44
     SPOT3_PHI = 270.0  # degrees
-    SPOT3_AMP = 1.5
+    SPOT3_AMP = 4.5
     SPOT3_SIZE = 0.3
     SPOT3_BLOS = 500.0
     SPOT3_BPERP = 0.0
@@ -71,7 +71,7 @@ class SimConfig:
     JDATE_REF = 2450000.0
 
     # --- Noise ---
-    SNR = 1000.0
+    SNR = 10000.0
     RANDOM_SEED = 42
 
 
@@ -213,11 +213,7 @@ def run_simulation():
         f.write("1e-3  # test_aim\n")
         f.write("1 1.0 1 1  # lineAmpConst k_QU enableV enableQU\n")
         f.write(f"1 {model_path}  # initTomogFile initModelPath\n")
-        f.write("0 1.0 1.0  # fitBri chiScaleI brightEntScale\n")
-        f.write("1 1.0 2.0  # fEntropyBright defaultBright maximumBright\n")
-        f.write("0 0 0 # 9 deprecated\n")
-        f.write("\n")
-        f.write("0  # estimateStrenght\n")
+        f.write("1 1 1 1 1  # fitBri fitMag fitBlos fitBperp fitChi\n")
         f.write("65000 input/lines.txt  # spectralResolution lineParamFile\n")
         f.write(
             f"{SimConfig.VEL_MIN} {SimConfig.VEL_MAX} lsd_pol polOut=V  # velStart velEnd obsFileType\n"

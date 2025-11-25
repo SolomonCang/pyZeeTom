@@ -25,7 +25,6 @@ MEM反演接口 - pyZeeTom项目特定参数化
 
 import numpy as np
 from typing import Tuple, Dict, Any, Optional, List
-from dataclasses import dataclass
 
 from core.mem_generic import MEMOptimizer, _get_c_gradc
 
@@ -35,43 +34,6 @@ try:
 except ImportError:
     ResponseMatrixCache = None
     DataPipeline = None
-
-
-@dataclass
-class StokesObservation:
-    """单个观测相位的Stokes谱线数据。"""
-    wl: np.ndarray  # 波长数组 (Nlambda,)
-    specI: np.ndarray  # I分量 (Nlambda,)
-    specQ: np.ndarray  # Q分量 (Nlambda,)
-    specU: np.ndarray  # U分量 (Nlambda,)
-    specV: np.ndarray  # V分量 (Nlambda,)
-    specI_sig: np.ndarray  # I分量噪声 (Nlambda,)
-    specQ_sig: np.ndarray  # Q分量噪声 (Nlambda,)
-    specU_sig: np.ndarray  # U分量噪声 (Nlambda,)
-    specV_sig: np.ndarray  # V分量噪声 (Nlambda,)
-
-
-@dataclass
-class SyntheticSpectrum:
-    """单次合成的Stokes谱线及其参数导数。"""
-    wl: np.ndarray
-    IIc: np.ndarray  # 合成I (Nlambda,)
-    QIc: np.ndarray  # 合成Q (Nlambda,)
-    UIc: np.ndarray  # 合成U (Nlambda,)
-    VIc: np.ndarray  # 合成V (Nlambda,)
-
-    # 导数: (Nlambda, Nparam)
-    dIc_dBlos: np.ndarray
-    dIc_dBperp: np.ndarray
-    dQc_dBlos: np.ndarray
-    dQc_dBperp: np.ndarray
-    dQc_dchi: np.ndarray
-    dUc_dBlos: np.ndarray
-    dUc_dBperp: np.ndarray
-    dUc_dchi: np.ndarray
-    dVc_dBlos: np.ndarray
-    dVc_dBperp: np.ndarray
-    dVc_dchi: np.ndarray
 
 
 class BrightnessDisk:
@@ -149,6 +111,9 @@ class MEMTomographyAdapter:
     def __init__(self,
                  fit_brightness: bool = False,
                  fit_magnetic: bool = True,
+                 fit_B_los: bool = True,
+                 fit_B_perp: bool = True,
+                 fit_chi: bool = True,
                  entropy_weights_bright: Optional[np.ndarray] = None,
                  entropy_weights_blos: Optional[np.ndarray] = None,
                  entropy_weights_bperp: Optional[np.ndarray] = None,
@@ -162,13 +127,25 @@ class MEMTomographyAdapter:
 
         参数：
             fit_brightness: 是否拟合亮度
-            fit_magnetic: 是否拟合磁场
+            fit_magnetic: 是否拟合磁场 (已弃用，保留兼容性，若为False则覆盖fit_B_los等)
+            fit_B_los: 是否拟合视向磁场
+            fit_B_perp: 是否拟合垂直磁场
+            fit_chi: 是否拟合磁场方位角
             entropy_weights_*: 各参数的熵权重 (Npix,)
                 若为None则默认为全1
             default_*: 默认值（熵计算所需）
         """
         self.fit_brightness = fit_brightness
-        self.fit_magnetic = fit_magnetic
+
+        # 兼容旧的 fit_magnetic 参数
+        if not fit_magnetic:
+            self.fit_B_los = False
+            self.fit_B_perp = False
+            self.fit_chi = False
+        else:
+            self.fit_B_los = fit_B_los
+            self.fit_B_perp = fit_B_perp
+            self.fit_chi = fit_chi
 
         # 存储权重和默认值
         self.entropy_weights_bright = entropy_weights_bright
@@ -209,9 +186,7 @@ class MEMTomographyAdapter:
         返回：
             (S0, gradS, gradgradS)
         """
-        npix = entropy_params.get(
-            'npix',
-            len(Image) // 3 if self.fit_magnetic else len(Image))
+        npix = entropy_params.get('npix', 0)
         gradS = np.zeros(len(Image))
         gradgradS = np.zeros(len(Image))
 
@@ -227,6 +202,7 @@ class MEMTomographyAdapter:
             defI = self.default_bright
 
             I_bright = Image[idx:idx + n_bright]
+
             S0 += np.sum(-w * (I_bright *
                                (np.log(I_bright / defI) - 1.0) + defI))
             gradS[idx:idx + n_bright] = w * (np.log(defI) - np.log(I_bright))
@@ -234,7 +210,7 @@ class MEMTomographyAdapter:
             idx += n_bright
 
         # Blos 部分（允许正负，对称熵）
-        if self.fit_magnetic:
+        if self.fit_B_los:
             n_blos = entropy_params.get('n_blos', npix)
             w = self.entropy_weights_blos
             if w is None:
@@ -253,7 +229,8 @@ class MEMTomographyAdapter:
             gradgradS[idx:idx + n_blos] = -w / (abs_Blos + 1e-15)
             idx += n_blos
 
-            # Bperp 部分（正值）
+        # Bperp 部分（正值）
+        if self.fit_B_perp:
             n_bperp = entropy_params.get('n_bperp', npix)
             w = self.entropy_weights_bperp
             if w is None:
@@ -266,7 +243,8 @@ class MEMTomographyAdapter:
             gradgradS[idx:idx + n_bperp] = -w / Bperp
             idx += n_bperp
 
-            # chi 部分（方位角，周期性）
+        # chi 部分（方位角，周期性）
+        if self.fit_chi:
             n_chi = entropy_params.get('n_chi', npix)
             w = self.entropy_weights_chi
             if w is None:
@@ -276,10 +254,11 @@ class MEMTomographyAdapter:
             # chi的熵：鼓励均匀分布，使用cos形式
             # S_chi = -sum w_i * cos(chi_i - chi_0)  (简化)
             # 或标准形式：S_chi = sum w_i * log(I0(kappa)) (von Mises)
-            # 这里使用简化：S = sum w * chi^2 (平滑化)
-            S0 += 0.1 * np.sum(w * chi**2)
-            gradS[idx:idx + n_chi] = 0.2 * w * chi
-            gradgradS[idx:idx + n_chi] = 0.2 * w
+            # 这里使用简化：S = - sum w * chi^2 (高斯先验，偏向于0)
+            # 注意：MEM最大化熵，因此必须是负的二次项
+            S0 -= 0.1 * np.sum(w * chi**2)
+            gradS[idx:idx + n_chi] = -0.2 * w * chi
+            gradgradS[idx:idx + n_chi] = -0.2 * w
             idx += n_chi
 
         return S0, gradS, gradgradS
@@ -330,8 +309,7 @@ class MEMTomographyAdapter:
 
         亮度和Bperp必须为正；Blos和chi无限制。
         """
-        npix = entropy_params.get('npix',
-                                  (ntot // 3 if self.fit_magnetic else ntot))
+        npix = entropy_params.get('npix', 0)
         idx = 0
 
         # 亮度约束（正值）
@@ -342,18 +320,20 @@ class MEMTomographyAdapter:
             idx += n_bright
 
         # Blos 无约束
-        if self.fit_magnetic:
+        if self.fit_B_los:
             n_blos = entropy_params.get('n_blos', npix)
             # Blos 可以是任意值
             idx += n_blos
 
-            # Bperp 约束（正值）
+        # Bperp 约束（正值）
+        if self.fit_B_perp:
             n_bperp = entropy_params.get('n_bperp', npix)
             Image[idx:idx + n_bperp] = np.clip(Image[idx:idx + n_bperp], 1e-6,
                                                np.inf)
             idx += n_bperp
 
-            # chi 约束（wrap to [-π, π]）
+        # chi 约束（wrap to [-π, π]）
+        if self.fit_chi:
             n_chi = entropy_params.get('n_chi', npix)
             Image[idx:idx + n_chi] = np.angle(
                 np.exp(1j * Image[idx:idx + n_chi]))
@@ -379,15 +359,19 @@ class MEMTomographyAdapter:
             n_bright = len(bright_disk.bright)
 
         n_blos = 0
+        if self.fit_B_los and mag_field is not None:
+            Image_parts.append(mag_field.Blos)
+            n_blos = len(mag_field.Blos)
+
         n_bperp = 0
+        if self.fit_B_perp and mag_field is not None:
+            Image_parts.append(mag_field.Bperp)
+            n_bperp = len(mag_field.Bperp)
+
         n_chi = 0
-        if self.fit_magnetic and mag_field is not None:
-            npix = mag_field.npix
-            Image_parts.extend(
-                [mag_field.Blos, mag_field.Bperp, mag_field.chi])
-            n_blos = npix
-            n_bperp = npix
-            n_chi = npix
+        if self.fit_chi and mag_field is not None:
+            Image_parts.append(mag_field.chi)
+            n_chi = len(mag_field.chi)
 
         if not Image_parts:
             return np.array([]), 0, 0, 0, 0
@@ -411,95 +395,18 @@ class MEMTomographyAdapter:
             bright_disk.set_bright(Image[idx:idx + n_bright])
             idx += n_bright
 
-        if self.fit_magnetic and mag_field is not None:
-            mag_field.set_from_vector(Image[idx:idx + 3 * n_blos])
+        if mag_field is not None:
+            if self.fit_B_los:
+                mag_field.Blos[:] = Image[idx:idx + n_blos]
+                idx += n_blos
 
-    def pack_data_and_response(
-        self,
-        obs_list: list,
-        syn_list: list,
-        fit_I: bool = True,
-        fit_Q: bool = False,
-        fit_U: bool = False,
-        fit_V: bool = True
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        打包观测数据、模型和响应矩阵。
+            if self.fit_B_perp:
+                mag_field.Bperp[:] = Image[idx:idx + n_bperp]
+                idx += n_bperp
 
-        参数：
-            obs_list: 观测 StokesObservation 列表
-            syn_list: 合成 SyntheticSpectrum 列表
-            fit_*: 是否包含各Stokes分量
-
-        返回：
-            (Data, Fmodel, sig2, Resp)
-        """
-        Data_parts = []
-        Fmodel_parts = []
-        sig2_parts = []
-        Resp_parts = []
-
-        n_lambda_tot = 0
-        for obs in obs_list:
-            n_lambda_tot += len(obs.wl)
-
-        # I分量
-        if fit_I:
-            Data_I = np.concatenate([obs.specI for obs in obs_list])
-            Fmodel_I = np.concatenate([syn.IIc for syn in syn_list])
-            sig2_I = np.concatenate([obs.specI_sig**2 for obs in obs_list])
-            Data_parts.append(Data_I)
-            Fmodel_parts.append(Fmodel_I)
-            sig2_parts.append(sig2_I)
-
-        # Q分量
-        if fit_Q:
-            Data_Q = np.concatenate([obs.specQ for obs in obs_list])
-            Fmodel_Q = np.concatenate([syn.QIc for syn in syn_list])
-            sig2_Q = np.concatenate([obs.specQ_sig**2 for obs in obs_list])
-            Data_parts.append(Data_Q)
-            Fmodel_parts.append(Fmodel_Q)
-            sig2_parts.append(sig2_Q)
-
-        # U分量
-        if fit_U:
-            Data_U = np.concatenate([obs.specU for obs in obs_list])
-            Fmodel_U = np.concatenate([syn.UIc for syn in syn_list])
-            sig2_U = np.concatenate([obs.specU_sig**2 for obs in obs_list])
-            Data_parts.append(Data_U)
-            Fmodel_parts.append(Fmodel_U)
-            sig2_parts.append(sig2_U)
-
-        # V分量
-        if fit_V:
-            Data_V = np.concatenate([obs.specV for obs in obs_list])
-            Fmodel_V = np.concatenate([syn.VIc for syn in syn_list])
-            sig2_V = np.concatenate([obs.specV_sig**2 for obs in obs_list])
-            Data_parts.append(Data_V)
-            Fmodel_parts.append(Fmodel_V)
-            sig2_parts.append(sig2_V)
-
-        Data = np.concatenate(Data_parts)
-        Fmodel = np.concatenate(Fmodel_parts)
-        sig2 = np.concatenate(sig2_parts)
-
-        # 响应矩阵（这里需要用户提供的求导数据）
-        # 简化版本：假设合成谱已包含导数信息
-        # 完整实现需要从 VelspaceDiskIntegrator 获取
-
-        ndata = len(Data)
-        nparam = 0
-        if self.fit_brightness:
-            nparam += len(obs_list[0].specI)  # 示例，实际应更正
-        if self.fit_magnetic:
-            # 假设 Npix 从 syn_list 推断
-            nparam += 3 * len(syn_list[0].dBlos_dBlos) if hasattr(
-                syn_list[0], 'dBlos_dBlos') else 3
-
-        # 占位：响应矩阵需要从积分器获取
-        Resp = np.zeros((ndata, nparam))
-
-        return Data, Fmodel, sig2, Resp
+            if self.fit_chi:
+                mag_field.chi[:] = Image[idx:idx + n_chi]
+                idx += n_chi
 
     def init_data_pipeline(self,
                            observations: List[Any],

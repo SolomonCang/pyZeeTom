@@ -347,7 +347,8 @@ def obsProfSetInRange(
         vel_end: float,
         vel_shifts: Optional[np.ndarray] = None,
         file_type: str = "auto",
-        pol_channels: Optional[List[str]] = None) -> List[ObservationProfile]:
+        pol_channels: Optional[List[str]] = None,
+        phases: Optional[np.ndarray] = None) -> List[ObservationProfile]:
     if vel_shifts is None:
         vel_shifts = np.zeros(len(fnames))
     if pol_channels is None:
@@ -363,6 +364,9 @@ def obsProfSetInRange(
                              vel_end=vel_end,
                              vel_shift=vel_shifts[i])
         if obs is not None:
+            # Inject phase if available
+            if phases is not None and i < len(phases):
+                obs.phase = float(phases[i])
             obsSet.append(obs)
         else:
             print(f"Warning: failed to load {fname}, skipping")

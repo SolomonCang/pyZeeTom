@@ -13,30 +13,30 @@ from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
 from scipy.interpolate import griddata
 
 # ==============================================================================
-# 参数空间 (PARAMETER SPACE)
-# 在此处修改所有输入参数和配置
+# PARAMETER SPACE
+# Modify all input parameters and configurations here
 # ==============================================================================
 PARAM_CONFIG = {
-    # 输入文件路径
+    # Input file path
     # 'model_path': 'output/spot_forward/spot_model_phase_0p00.tomog',
-    'model_path': 'output/spot_forward/geomodel_phase_00.tomog',
-
-    # 输出文件路径 (设为 None 则直接显示窗口，设为 'filename.png' 则保存)
+    'model_path': 'output/inverse_test/mem_inversion_model.tomog',
+    # 'model_path': 'output/spot_forward/truth_model.tomog',
+    # Output file path (Set to None to show window, set to 'filename.png' to save)
     'out_fig': None,
 
-    # 投影方式: 'polar' (极坐标) 或 'cart' (笛卡尔坐标)
+    # Projection method: 'polar' (Polar coordinates) or 'cart' (Cartesian coordinates)
     'projection': 'polar',
 
-    # 插值网格分辨率 (数值越大越精细，但在极坐标中心可能会有伪影)
+    # Interpolation grid resolution (Larger values for finer details, but may cause artifacts at polar center)
     'grid_size': 200,
 
-    # 等高线层级数量 (数值越大颜色过渡越平滑)
+    # Number of contour levels (Larger values for smoother color transitions)
     'contour_levels': 100,
 
-    # 视线方向磁场 (Blos) 的色标最大绝对值 (Gauss)
+    # Max absolute value for Line-of-Sight Magnetic Field (Blos) colormap (Gauss)
     'vmax_blos': 500.0,
 
-    # 横向磁场 (Bperp) 的色标最大值 (Gauss)
+    # Max value for Transverse Magnetic Field (Bperp) colormap (Gauss)
     'vmax_bperp': 500.0,
 }
 # ==============================================================================
@@ -44,13 +44,13 @@ PARAM_CONFIG = {
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
-# 尝试导入核心模块
+# Try to import core module
 try:
     from core.disk_geometry_integrator import VelspaceDiskIntegrator
 except ImportError:
     print("Warning: Could not import 'core.disk_geometry_integrator'.")
 
-    # 定义假的读取器用于演示（如果核心模块缺失）
+    # Define dummy reader for demonstration (if core module is missing)
     class VelspaceDiskIntegrator:
 
         @staticmethod
@@ -60,13 +60,13 @@ except ImportError:
 
 def create_brightness_colormap():
     """
-    创建亮度色标：中心为白色（brightness=1），
-    低于1为蓝色（吸收），高于1为红色（发射）
+    Create brightness colormap: Center is white (brightness=1),
+    Below 1 is blue (absorption), Above 1 is red (emission)
     """
     colors = [
-        (0.0, 0.0, 1.0),  # 蓝色（吸收）
-        (1.0, 1.0, 1.0),  # 白色（归一化）
-        (1.0, 0.0, 0.0)  # 红色（发射）
+        (0.0, 0.0, 1.0),  # Blue (Absorption)
+        (1.0, 1.0, 1.0),  # White (Normalized)
+        (1.0, 0.0, 0.0)  # Red (Emission)
     ]
     n_bins = 256
     cmap = LinearSegmentedColormap.from_list('brightness', colors, N=n_bins)
@@ -75,15 +75,15 @@ def create_brightness_colormap():
 
 def create_bperp_colormap():
     """
-    创建 Bperp 色标：白色 -> 橙黄色 -> 深色
+    Create Bperp colormap: White -> Orange-Yellow -> Deep Red
     """
-    # 定义颜色渐变列表
-    # 您可以调整这里的颜色名称或十六进制代码来微调效果
+    # Define color gradient list
+    # You can adjust color names or hex codes here to fine-tune the effect
     colors = [
-        "white",  # 0.0: 起始为白色
-        "#FFD700",  # 0.33: 金色 (Gold)
-        "#FF8C00",  # 0.66: 深橙色 (DarkOrange)
-        "#8B0000"  # 1.0: 深红色 (DarkRed)
+        "white",  # 0.0: Start with white
+        "#FFD700",  # 0.33: Gold
+        "#FF8C00",  # 0.66: DarkOrange
+        "#8B0000"  # 1.0: DarkRed
     ]
     cmap = LinearSegmentedColormap.from_list('white_orange_deep',
                                              colors,
@@ -93,19 +93,19 @@ def create_bperp_colormap():
 
 def set_contour_edge_color(cf, color="face"):
     """
-    兼容性辅助函数：设置等高线填充的边缘颜色。
-    用于消除等高线之间的细微白线。
-    兼容 Matplotlib 旧版本 (.collections) 和新版本 (直接 set_edgecolor)。
+    Compatibility helper function: Set edge color for contour fill.
+    Used to eliminate fine white lines between contours.
+    Compatible with old Matplotlib versions (.collections) and new versions (direct set_edgecolor).
     """
-    # 新版本 Matplotlib (3.8+)
+    # New version Matplotlib (3.8+)
     if hasattr(cf, 'set_edgecolor'):
         try:
             cf.set_edgecolor(color)
             return
         except Exception:
-            pass  # 如果失败，尝试旧方法
+            pass  # If failed, try old method
 
-    # 旧版本 Matplotlib
+    # Old version Matplotlib
     if hasattr(cf, 'collections'):
         for c in cf.collections:
             c.set_edgecolor(color)
@@ -113,9 +113,9 @@ def set_contour_edge_color(cf, color="face"):
 
 def plot_geomodel_contour(geom, meta, table, config):
     """
-    使用 Contourf (等高线填充) 绘制几何模型。
+    Plot geometric model using Contourf (filled contours).
     """
-    # 提取配置参数
+    # Extract configuration parameters
     projection = config['projection']
     grid_size = config['grid_size']
     levels = config['contour_levels']
@@ -123,13 +123,13 @@ def plot_geomodel_contour(geom, meta, table, config):
     vmax_bperp = config['vmax_bperp']
     out_fig = config['out_fig']
 
-    # 提取数据
+    # Extract data
     r = table['r']
     phi = table['phi']
     Blos = table.get('Blos', np.zeros_like(r))
     Bperp = table.get('Bperp', np.zeros_like(r))
 
-    # 处理亮度数据
+    # Handle brightness data
     if 'A' in table:
         brightness = table['A']
     elif 'amp' in table:
@@ -143,11 +143,11 @@ def plot_geomodel_contour(geom, meta, table, config):
     else:
         brightness = np.ones_like(r)
 
-    # 创建色标
+    # Create colormaps
     bright_cmap = create_brightness_colormap()
-    bperp_cmap = create_bperp_colormap()  # <--- 使用新的橙黄色标
+    bperp_cmap = create_bperp_colormap()  # <--- Use new orange colormap
 
-    # 动态设置亮度范围 Norm
+    # Dynamically set brightness range Norm
     bright_min = np.min(brightness)
     bright_max = np.max(brightness)
     if np.allclose(bright_min, bright_max):
@@ -158,13 +158,13 @@ def plot_geomodel_contour(geom, meta, table, config):
         bright_norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
 
     # -------------------------------------------------------
-    # 数据网格化 (Grid Interpolation)
+    # Grid Interpolation
     # -------------------------------------------------------
     if projection == 'polar':
-        # 修复：处理 0/2pi 边界的循环插值问题
-        # 将数据在 phi 方向复制一份，确保 griddata 能跨越边界插值
+        # Fix: Handle cyclic interpolation at 0/2pi boundary
+        # Duplicate data in phi direction to ensure griddata interpolates across boundary
 
-        # 复制 phi < pi/2 的点到 2pi 之后
+        # Copy points with phi < pi/2 to after 2pi
         mask_low = phi < np.pi / 2
         phi_append_high = phi[mask_low] + 2 * np.pi
         r_append_high = r[mask_low]
@@ -172,7 +172,7 @@ def plot_geomodel_contour(geom, meta, table, config):
         blos_append_high = Blos[mask_low]
         bperp_append_high = Bperp[mask_low]
 
-        # 复制 phi > 3pi/2 的点到 0 之前
+        # Copy points with phi > 3pi/2 to before 0
         mask_high = phi > 3 * np.pi / 2
         phi_append_low = phi[mask_high] - 2 * np.pi
         r_append_low = r[mask_high]
@@ -180,7 +180,7 @@ def plot_geomodel_contour(geom, meta, table, config):
         blos_append_low = Blos[mask_high]
         bperp_append_low = Bperp[mask_high]
 
-        # 合并数据
+        # Concatenate data
         phi_padded = np.concatenate([phi, phi_append_high, phi_append_low])
         r_padded = np.concatenate([r, r_append_high, r_append_low])
         bright_padded = np.concatenate(
@@ -191,12 +191,12 @@ def plot_geomodel_contour(geom, meta, table, config):
 
         points_padded = np.column_stack([phi_padded, r_padded])
 
-        # 极坐标网格
+        # Polar grid
         phi_grid_1d = np.linspace(0, 2 * np.pi, grid_size)
         r_grid_1d = np.linspace(0, np.max(r), grid_size)
         X_grid, Y_grid = np.meshgrid(phi_grid_1d, r_grid_1d)
 
-        # 使用 padded 数据进行插值
+        # Interpolate using padded data
         print(
             "Interpolating data to grid for contour plotting (with cyclic padding)..."
         )
@@ -213,7 +213,7 @@ def plot_geomodel_contour(geom, meta, table, config):
                               method='cubic',
                               fill_value=0.0)
     else:
-        # 笛卡尔坐标网格 (保持原样，因为转换到 x,y 后不存在边界断裂问题)
+        # Cartesian grid (Keep as is, no boundary discontinuity issue after converting to x,y)
         x = r * np.cos(phi)
         y = r * np.sin(phi)
         xi = np.linspace(np.min(x), np.max(x), grid_size)
@@ -221,7 +221,7 @@ def plot_geomodel_contour(geom, meta, table, config):
         X_grid, Y_grid = np.meshgrid(xi, yi)
         points = np.column_stack([x, y])
 
-        # 执行插值
+        # Execute interpolation
         print("Interpolating data to grid for contour plotting...")
         Bright_grid = griddata(points,
                                brightness, (X_grid, Y_grid),
@@ -237,7 +237,7 @@ def plot_geomodel_contour(geom, meta, table, config):
                               fill_value=0.0)
 
     # -------------------------------------------------------
-    # 绘图
+    # Plotting
     # -------------------------------------------------------
     fig = plt.figure(figsize=(18, 5))
 
@@ -275,7 +275,7 @@ def plot_geomodel_contour(geom, meta, table, config):
     plt.colorbar(cf2, ax=ax2, fraction=0.046, pad=0.04, label='Blos (G)')
 
     # 3. Bperp Plot
-    # 使用新的 bperp_cmap
+    # Use new bperp_cmap
     cf3 = ax3.contourf(X_grid,
                        Y_grid,
                        Bperp_grid,
@@ -288,14 +288,14 @@ def plot_geomodel_contour(geom, meta, table, config):
     ax3.set_title('Bperp (Transverse B-field)', fontsize=11, pad=20)
     plt.colorbar(cf3, ax=ax3, fraction=0.046, pad=0.04, label='Bperp (G)')
 
-    # 设置坐标轴标签
+    # Set axis labels
     if projection == 'cart':
         for ax in [ax1, ax2, ax3]:
             ax.set_xlabel('x (R*)')
             ax.set_ylabel('y (R*)')
             ax.set_aspect('equal')
 
-    # 添加元数据信息
+    # Add metadata info
     info = []
     if 'iteration' in meta: info.append(f"iter={meta['iteration']}")
     if 'chi2' in meta: info.append(f"chi2={meta['chi2']:.2f}")
@@ -324,7 +324,7 @@ def main():
     if not Path(model_file).exists():
         print(f"Error: {model_file} not found.")
         print("Generating dummy data for demonstration purposes...")
-        # 生成假数据
+        # Generate dummy data
         n_points = 5000
         r = np.sqrt(np.random.uniform(0, 1, n_points))
         phi = np.random.uniform(0, 2 * np.pi, n_points)
