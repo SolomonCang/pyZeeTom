@@ -9,8 +9,9 @@ import sys
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, Rbf
 
 # ==============================================================================
 # PARAMETER SPACE
@@ -19,7 +20,7 @@ from scipy.interpolate import griddata
 PARAM_CONFIG = {
     # Input file path
     # 'model_path': 'output/spot_forward/spot_model_phase_0p00.tomog',
-    'model_path': 'output/inverse_test/mem_inversion_model.tomog',
+    'model_path': 'output/ap149_test/mem_inversion_model.tomog',
     # 'model_path': 'output/spot_forward/truth_model.tomog',
     # Output file path (Set to None to show window, set to 'filename.png' to save)
     'out_fig': None,
@@ -27,17 +28,34 @@ PARAM_CONFIG = {
     # Projection method: 'polar' (Polar coordinates) or 'cart' (Cartesian coordinates)
     'projection': 'polar',
 
+    # Interpolation method: 'rbf' (Smoothest, slower) or 'cubic' (Fast, potentially artifacts)
+    'interp_method': 'cubic',
+
     # Interpolation grid resolution (Larger values for finer details, but may cause artifacts at polar center)
-    'grid_size': 200,
+    'grid_size': 400,
 
     # Number of contour levels (Larger values for smoother color transitions)
     'contour_levels': 100,
+
+    # Optional: Apply Gaussian smoothing to the interpolated grid (sigma in pixels)
+    # Set to > 0.0 (e.g., 2.0) to smooth out discrete artifacts/noise
+    'smoothing_sigma': 0.0,
+
+    # Plot orientation settings
+    # theta_direction: 1 for Counter-Clockwise (Matplotlib default), -1 for Clockwise
+    # theta_zero_location: 'E' (East, default), 'N' (North), 'S' (South), 'W' (West)
+    # Common in astronomy: North up (Zero='N'), Clockwise (Direction=-1) -> Phase increases CW from North
+    'theta_direction': 1,
+    'theta_zero_location': 'S',
 
     # Max absolute value for Line-of-Sight Magnetic Field (Blos) colormap (Gauss)
     'vmax_blos': 500.0,
 
     # Max value for Transverse Magnetic Field (Bperp) colormap (Gauss)
     'vmax_bperp': 500.0,
+
+    # Stellar Mass (M_sun) for corotation radius calculation
+    'mass': 1.0,
 }
 # ==============================================================================
 
@@ -150,12 +168,21 @@ def plot_geomodel_contour(geom, meta, table, config):
     # Dynamically set brightness range Norm
     bright_min = np.min(brightness)
     bright_max = np.max(brightness)
-    if np.allclose(bright_min, bright_max):
-        bright_norm = TwoSlopeNorm(vmin=0.8, vcenter=1.0, vmax=1.2)
-    else:
-        vmin = min(bright_min, 1.0 - (bright_max - 1.0))
-        vmax = max(bright_max, 1.0 + (1.0 - bright_min))
-        bright_norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
+
+    # Calculate max deviation from 1.0 to ensure symmetric intensity scale
+    # This ensures that a deviation of 0.1 in absorption has the same color intensity
+    # as a deviation of 0.1 in emission.
+    delta = max(abs(bright_min - 1.0), abs(bright_max - 1.0))
+
+    # Enforce minimum dynamic range to avoid amplifying numerical noise
+    # If the disk is flat (all ~1.0), we don't want to show full blue/red for 1e-6 noise.
+    if delta < 0.02:
+        delta = 0.02
+
+    vmin = 1.0 - delta
+    vmax = 1.0 + delta
+
+    bright_norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
 
     # -------------------------------------------------------
     # Grid Interpolation
@@ -200,18 +227,48 @@ def plot_geomodel_contour(geom, meta, table, config):
         print(
             "Interpolating data to grid for contour plotting (with cyclic padding)..."
         )
-        Bright_grid = griddata(points_padded,
-                               bright_padded, (X_grid, Y_grid),
-                               method='cubic',
-                               fill_value=1.0)
-        Blos_grid = griddata(points_padded,
-                             blos_padded, (X_grid, Y_grid),
-                             method='cubic',
-                             fill_value=0.0)
-        Bperp_grid = griddata(points_padded,
-                              bperp_padded, (X_grid, Y_grid),
-                              method='cubic',
-                              fill_value=0.0)
+
+        interp_method = config.get('interp_method', 'cubic')
+
+        if interp_method == 'rbf':
+            print("Using RBF interpolation (smoother)...")
+            # RBF interpolation
+            # Use 'thin_plate' or 'multiquadric' for smooth surfaces
+            # Note: Rbf takes x, y, z arrays
+            try:
+                rbf_func_bright = Rbf(points_padded[:, 0],
+                                      points_padded[:, 1],
+                                      bright_padded,
+                                      function='thin_plate')
+                rbf_func_blos = Rbf(points_padded[:, 0],
+                                    points_padded[:, 1],
+                                    blos_padded,
+                                    function='thin_plate')
+                rbf_func_bperp = Rbf(points_padded[:, 0],
+                                     points_padded[:, 1],
+                                     bperp_padded,
+                                     function='thin_plate')
+
+                Bright_grid = rbf_func_bright(X_grid, Y_grid)
+                Blos_grid = rbf_func_blos(X_grid, Y_grid)
+                Bperp_grid = rbf_func_bperp(X_grid, Y_grid)
+            except Exception as e:
+                print(f"RBF interpolation failed: {e}. Falling back to cubic.")
+                interp_method = 'cubic'
+
+        if interp_method != 'rbf':
+            Bright_grid = griddata(points_padded,
+                                   bright_padded, (X_grid, Y_grid),
+                                   method=interp_method,
+                                   fill_value=1.0)
+            Blos_grid = griddata(points_padded,
+                                 blos_padded, (X_grid, Y_grid),
+                                 method=interp_method,
+                                 fill_value=0.0)
+            Bperp_grid = griddata(points_padded,
+                                  bperp_padded, (X_grid, Y_grid),
+                                  method=interp_method,
+                                  fill_value=0.0)
     else:
         # Cartesian grid (Keep as is, no boundary discontinuity issue after converting to x,y)
         x = r * np.cos(phi)
@@ -223,18 +280,66 @@ def plot_geomodel_contour(geom, meta, table, config):
 
         # Execute interpolation
         print("Interpolating data to grid for contour plotting...")
-        Bright_grid = griddata(points,
-                               brightness, (X_grid, Y_grid),
-                               method='cubic',
-                               fill_value=1.0)
-        Blos_grid = griddata(points,
-                             Blos, (X_grid, Y_grid),
-                             method='cubic',
-                             fill_value=0.0)
-        Bperp_grid = griddata(points,
-                              Bperp, (X_grid, Y_grid),
-                              method='cubic',
-                              fill_value=0.0)
+
+        interp_method = config.get('interp_method', 'cubic')
+
+        if interp_method == 'rbf':
+            print("Using RBF interpolation (smoother)...")
+            try:
+                rbf_func_bright = Rbf(x, y, brightness, function='thin_plate')
+                rbf_func_blos = Rbf(x, y, Blos, function='thin_plate')
+                rbf_func_bperp = Rbf(x, y, Bperp, function='thin_plate')
+
+                Bright_grid = rbf_func_bright(X_grid, Y_grid)
+                Blos_grid = rbf_func_blos(X_grid, Y_grid)
+                Bperp_grid = rbf_func_bperp(X_grid, Y_grid)
+            except Exception as e:
+                print(f"RBF interpolation failed: {e}. Falling back to cubic.")
+                interp_method = 'cubic'
+
+        if interp_method != 'rbf':
+            Bright_grid = griddata(points,
+                                   brightness, (X_grid, Y_grid),
+                                   method=interp_method,
+                                   fill_value=1.0)
+            Blos_grid = griddata(points,
+                                 Blos, (X_grid, Y_grid),
+                                 method=interp_method,
+                                 fill_value=0.0)
+            Bperp_grid = griddata(points,
+                                  Bperp, (X_grid, Y_grid),
+                                  method=interp_method,
+                                  fill_value=0.0)
+
+    # Optional: Apply Gaussian smoothing
+    sigma = config.get('smoothing_sigma', 0.0)
+    if sigma > 0:
+        from scipy.ndimage import gaussian_filter
+        print(f"Applying Gaussian smoothing (sigma={sigma})...")
+        Bright_grid = gaussian_filter(Bright_grid, sigma=sigma)
+        Blos_grid = gaussian_filter(Blos_grid, sigma=sigma)
+        Bperp_grid = gaussian_filter(Bperp_grid, sigma=sigma)
+
+    # -------------------------------------------------------
+    # Calculate Corotation Radius
+    # -------------------------------------------------------
+    corotation_radius = None
+    if geom is not None:
+        try:
+            mass = config.get('mass', 1.0)
+            period = getattr(geom, 'period', 1.0)
+            radius = getattr(geom, 'r0', 1.0)
+
+            if mass > 0 and period > 0 and radius > 0:
+                P_year = period / 365.25
+                a_AU = (mass * P_year**2)**(1. / 3.)
+                a_Rsun = a_AU * 215.032  # 1 AU = 215.032 R_sun
+                corotation_radius = a_Rsun / radius
+                print(
+                    f"Corotation radius: {corotation_radius:.2f} R* (Mass={mass} M_sun)"
+                )
+        except Exception as e:
+            print(f"Could not calculate corotation radius: {e}")
 
     # -------------------------------------------------------
     # Plotting
@@ -247,6 +352,45 @@ def plot_geomodel_contour(geom, meta, table, config):
     ax2 = fig.add_subplot(132, **subplot_kw)
     ax3 = fig.add_subplot(133, **subplot_kw)
 
+    # Apply polar plot orientation settings
+    if projection == 'polar':
+        direction = config.get('theta_direction', 1)
+        zero_loc = config.get('theta_zero_location', 'E')
+        for ax in [ax1, ax2, ax3]:
+            ax.set_theta_direction(direction)
+            ax.set_theta_zero_location(zero_loc)
+
+            # Add Phase labels
+            # Assuming Phase 0 is at angle 0, and Phase 1 is at 360 (2pi)
+            # We want to label phases 0.0, 0.25, 0.5, 0.75
+            # Note: set_xticks expects values in radians
+            phases = [0.0, 0.25, 0.5, 0.75]
+            angles = [p * 2 * np.pi for p in phases]
+            labels = [f"φ={p}" for p in phases]
+            ax.set_xticks(angles)
+            ax.set_xticklabels(labels)
+
+    # Helper to plot corotation radius
+    def plot_corotation(ax):
+        if corotation_radius is not None:
+            if projection == 'polar':
+                theta = np.linspace(0, 2 * np.pi, 100)
+                r_circ = np.full_like(theta, corotation_radius)
+                ax.plot(theta,
+                        r_circ,
+                        'k--',
+                        linewidth=1.5,
+                        label='Corotation')
+            else:
+                circ = Circle((0, 0),
+                              corotation_radius,
+                              color='black',
+                              fill=False,
+                              linestyle='--',
+                              linewidth=1.5,
+                              label='Corotation')
+                ax.add_artist(circ)
+
     # 1. Brightness Plot
     cf1 = ax1.contourf(X_grid,
                        Y_grid,
@@ -255,6 +399,7 @@ def plot_geomodel_contour(geom, meta, table, config):
                        cmap=bright_cmap,
                        norm=bright_norm)
     set_contour_edge_color(cf1, "face")
+    plot_corotation(ax1)
 
     ax1.set_title('Brightness (Absorption ← 1 → Emission)',
                   fontsize=11,
@@ -270,6 +415,7 @@ def plot_geomodel_contour(geom, meta, table, config):
                        cmap='RdBu_r',
                        norm=blos_norm)
     set_contour_edge_color(cf2, "face")
+    plot_corotation(ax2)
 
     ax2.set_title('Blos (Line-of-Sight B-field)', fontsize=11, pad=20)
     plt.colorbar(cf2, ax=ax2, fraction=0.046, pad=0.04, label='Blos (G)')
@@ -284,6 +430,7 @@ def plot_geomodel_contour(geom, meta, table, config):
                        vmin=0,
                        vmax=vmax_bperp)
     set_contour_edge_color(cf3, "face")
+    plot_corotation(ax3)
 
     ax3.set_title('Bperp (Transverse B-field)', fontsize=11, pad=20)
     plt.colorbar(cf3, ax=ax3, fraction=0.046, pad=0.04, label='Bperp (G)')

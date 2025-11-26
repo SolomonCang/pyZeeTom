@@ -25,9 +25,10 @@ from core.SpecIO import loadObsProfile  # noqa: E402
 #                                 Configuration Area
 # ==============================================================================
 CONFIG = {
-    'params_file': 'input/params_inverse_test.txt',
-    'input_dir': 'input/inSpec',  # Observation data directory
-    'output_dir': 'output/inverse_test',  # Model data directory
+    'params_file': 'input/intomog_ap149_05Dec06_updated.txt',
+    'input_dir':
+    '/Users/tianqi/Documents/Project/mag2acc/ap149/05Dec06/int/Ha_spec',  # Observation data directory
+    'output_dir': 'output/ap149_test',  # Model data directory
 
     # Select Stokes parameter to display: 'I', 'V', 'Q', 'U'
     'stokes': 'V',
@@ -35,17 +36,16 @@ CONFIG = {
 
     # 'image':   Plot residual dynamic spectrum (Obs - Model)
     # 'stacked': Plot stacked line plot (Obs and Model in same plot)
-    'plot_mode': 'stacked',
+    'plot_mode': 'image',
     'out_file': None,
 
     # --- Image Mode Config (Residuals) ---
     'cmap': 'RdBu_r',
-    'vmin_res':
-    -0.001,  # Residual color range (adjust based on signal strength)
-    'vmax_res': 0.001,
+    'vmin_res': -0.1,  # Residual color range (adjust based on signal strength)
+    'vmax_res': 0.1,
 
     # --- Stacked Mode Config ---
-    'stack_scale': 1.0,
+    'stack_scale': 0.5,
     'pol_scale_mult': 1,
     'obs_color': 'black',
     'model_color': 'red',
@@ -73,6 +73,7 @@ def find_file_for_index(base_dir, index):
         f"spec{index:03d}*",  # spec001...
         f"spec_{index:03d}*",  # spec_001...
         f"{index:03d}*",  # 001...
+        f"*_{index:03d}*",  # ap149_001.s
     ]
 
     # Possible extensions
@@ -167,6 +168,17 @@ def get_stokes_data(obs_list, stokes_char):
     return data_list
 
 
+def interpolate_data_list(x_target, x_list, data_list):
+    """Interpolate all spectra in data_list to x_target grid."""
+    new_data = []
+    for x, y in zip(x_list, data_list):
+        if len(x) != len(x_target) or not np.allclose(x, x_target):
+            new_data.append(np.interp(x_target, x, y))
+        else:
+            new_data.append(y)
+    return new_data
+
+
 def main():
     params_file = CONFIG['params_file']
     input_dir = CONFIG['input_dir']
@@ -208,8 +220,9 @@ def main():
         print("Warning: Phases do not match exactly between input and output!")
 
     # 4. Prepare Data
-    xs_list = [obs.wl for obs in obs_in]  # Assume same grid
-    x_sample = xs_list[0]
+    xs_list_in = [obs.wl for obs in obs_in]
+    xs_list_out = [obs.wl for obs in obs_out]
+    x_sample = xs_list_in[0]
 
     # Auto X-label
     if np.mean(x_sample) < 2000:
@@ -222,12 +235,21 @@ def main():
     data_in_I = get_stokes_data(obs_in, 'I')
     data_out_I = get_stokes_data(obs_out, 'I')
 
+    # Interpolate to common grid
+    data_in_I = interpolate_data_list(x_sample, xs_list_in, data_in_I)
+    data_out_I = interpolate_data_list(x_sample, xs_list_out, data_out_I)
+
     data_in_Pol = None
     data_out_Pol = None
 
     if stokes_cfg in ['V', 'Q', 'U']:
         data_in_Pol = get_stokes_data(obs_in, stokes_cfg)
         data_out_Pol = get_stokes_data(obs_out, stokes_cfg)
+
+        # Interpolate Pol
+        data_in_Pol = interpolate_data_list(x_sample, xs_list_in, data_in_Pol)
+        data_out_Pol = interpolate_data_list(x_sample, xs_list_out,
+                                             data_out_Pol)
 
         # Auto-scale check
         max_pol = np.max(np.abs(data_in_Pol)) if data_in_Pol else 0.0
@@ -304,7 +326,7 @@ def main():
 
             for i in range(len(times_in)):
                 phase = times_in[i]
-                x = xs_list[i]
+                x = x_sample
                 y_in = d_in[i]
                 y_out = d_out[i]
 

@@ -271,33 +271,11 @@ class MEMTomographyAdapter:
 
         χ² = sum_k [(F_k - D_k)^2 / sigma_k^2]
 
-        使用简单缓存加速重复计算。
-
         返回：
             (C0, gradC)
         """
-        # 生成缓存键（基于 Resp 和 Data 的哈希）
-        try:
-            resp_key = hash(Resp.tobytes())
-            data_key = hash(Data.tobytes())
-            cache_key = (resp_key, data_key)
-
-            # 检查缓存
-            if cache_key in self._constraint_cache:
-                return self._constraint_cache[cache_key]
-        except (TypeError, ValueError):
-            # 如果无法哈希（如大数组），跳过缓存
-            cache_key = None
-
         # 计算约束
         C0, gradC = _get_c_gradc(Data, Fmodel, sig2, Resp)
-
-        # 存储到缓存（如果键有效）
-        if cache_key is not None:
-            # 限制缓存大小
-            if len(self._constraint_cache) > 20:
-                self._constraint_cache.pop(next(iter(self._constraint_cache)))
-            self._constraint_cache[cache_key] = (C0, gradC)
 
         return C0, gradC
 

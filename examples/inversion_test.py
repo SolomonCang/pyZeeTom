@@ -46,9 +46,9 @@ def main():
     print("=" * 60)
 
     # Paths
-    param_file = project_root / 'input/params_inverse_test.txt'
+    param_file = project_root / 'input/intomog_ap149_05Dec06_updated.txt'
     truth_file = project_root / 'output/spot_forward/truth_model.tomog'
-    output_dir = project_root / 'output/inverse_test'
+    output_dir = project_root / 'output/ap149_test'
 
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -60,8 +60,7 @@ def main():
                                    output_dir=str(output_dir),
                                    config_overrides={
                                        'entropyWeight': 0.0001,
-                                       'smoothnessWeight': 0.001,
-                                       'numIterations': 10
+                                       'smoothnessWeight': 0.001
                                    })
 
     if not results:

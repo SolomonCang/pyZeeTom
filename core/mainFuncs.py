@@ -210,11 +210,10 @@ class readParamsTomog:
 
         # Calculate synchronous orbit radius and output
         if self.mass > 0 and self.period > 0:
-            # Kepler's third law: a^3 = G*M*P^2/(4π^2)
+            # Kepler's third law: a^3 = M * P^2 (in AU, M_sun, Year units)
             # Units: solar mass, days, solar radius
-            G_solar = 4 * np.pi**2  # AU^3 / (M_sun * year^2)
             P_year = self.period / 365.25
-            a_AU = (G_solar * self.mass * P_year**2)**(1. / 3.)
+            a_AU = (self.mass * P_year**2)**(1. / 3.)
             a_Rsun = a_AU * 215.032  # 1 AU = 215.032 R_sun
             self.corotation_radius = a_Rsun / self.radius  # In units of stellar radius
             if verbose:

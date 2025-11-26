@@ -30,9 +30,10 @@ from core.SpecIO import loadObsProfile, ObservationProfile
 # ==============================================================================
 CONFIG = {
     # --- Data Input Configuration ---
-    'params_file': 'input/params_inverse_test.txt',  # Parameter file path
+    'params_file':
+    'input/intomog_ap149_05Dec06_updated.txt',  # Parameter file path
     # 'model_dir': 'output/inverse_test',  # Directory containing spectrum files
-    'model_dir': 'input/inSpec',
+    'model_dir': 'output/ap149_test',
     # Specify file list (optional)
     # None: Auto search (phase001.lsd, .s, .spec etc.)
     'file_list': None,
@@ -40,21 +41,21 @@ CONFIG = {
     # Select Stokes parameter to display
     # 'I': Plot I only
     # 'V', 'Q', 'U': Plot two panels, left I, right V/Q/U
-    'stokes': 'V',
+    'stokes': 'I',
     'file_type': 'auto',  # File type hint passed to SpecIO
 
     # --- Plotting Mode Configuration ---
     # 'image':   Plot dynamic spectrum (colormap/heatmap)
     # 'stacked': Plot stacked line plot (all spectra on one plot, offset by phase)
-    'plot_mode': 'stacked',
+    'plot_mode': 'image',
 
     # --- Output Configuration ---
     'out_file': None,  # Output path (e.g. 'plot.png'), None for popup window
 
     # --- 'image' Mode Specific Configuration ---
     'cmap': 'RdBu_r',  # Colormap
-    'vmin': 0.98,  # Color lower limit for Stokes I
-    'vmax': 1.02,  # Color upper limit for Stokes I
+    'vmin': 0.85,  # Color lower limit for Stokes I
+    'vmax': 1.3,  # Color upper limit for Stokes I
     # Polarization component color range usually needs to be smaller
     'vmin_pol': -0.001,
     'vmax_pol': 0.001,
@@ -92,6 +93,7 @@ def find_file_for_index(base_dir, index):
         f"spec{index:03d}*",  # spec001...
         f"spec_{index:03d}*",  # spec_001...
         f"{index:03d}*",  # 001...
+        f"*_{index:03d}*",  # ap149_001.s
     ]
 
     # Possible extensions
@@ -331,8 +333,20 @@ def main():
 
             # Note: IrregularDynamicSpectrum.plot creates a new figure, here we need to manually plot on ax
             # We use pcolormesh directly
-            # For simplicity, assume consistent grid, build 2D array
-            img_data = np.array(current_intensities)
+
+            # Ensure all spectra are on the same grid (interpolate if necessary)
+            interpolated_intensities = []
+            for i, spec in enumerate(current_intensities):
+                # Check if grid matches x_sample
+                if len(spec) != len(x_sample) or not np.allclose(
+                        xs_list[i], x_sample):
+                    # Interpolate to x_sample grid
+                    interp_spec = np.interp(x_sample, xs_list[i], spec)
+                    interpolated_intensities.append(interp_spec)
+                else:
+                    interpolated_intensities.append(spec)
+
+            img_data = np.array(interpolated_intensities)
             # img_data shape: (n_phases, n_pixels)
 
             # Construct grid
