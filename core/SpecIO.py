@@ -8,8 +8,8 @@ import numpy as np
 
 def write_model_grid(filename: str, grid, meta: dict = None):
     """
-    保存 diskGrid 结构到文件，支持所有像素属性（r, phi, area, ring_id, phi_id, ...）。
-    meta 可选，写入文件头部（json）。
+    Save diskGrid structure to file, supporting all pixel attributes (r, phi, area, ring_id, phi_id, ...).
+    meta is optional, written to file header (json).
     """
     meta = meta or {}
     with open(filename, 'w', encoding='utf-8') as f:
@@ -28,7 +28,7 @@ def write_model_grid(filename: str, grid, meta: dict = None):
 
 def load_model_grid(filename: str):
     """
-    读取 diskGrid 结构文件，返回 grid-like 对象和meta。
+    Read diskGrid structure file, return grid-like object and meta.
     """
     from types import SimpleNamespace as _NS
     with open(filename, 'r', encoding='utf-8') as f:
@@ -55,10 +55,10 @@ def load_model_grid(filename: str):
 
 """SpecIO.py — Spectral IO utilities
 
-- 读入：支持 LSD/spec (I/pol/simple) 光谱数据为 ObservationProfile
-- 写出：支持根据模型积分结果写出模型光谱（速度或波长域)
+- Input: Supports LSD/spec (I/pol/simple) spectral data as ObservationProfile
+- Output: Supports writing model spectra (velocity or wavelength domain) based on model integration results
 
-兼容老接口（loadObsProfile/obsProfSetInRange/getObservedEW）。
+Compatible with old interfaces (loadObsProfile/obsProfSetInRange/getObservedEW).
 """
 
 import io
@@ -126,25 +126,25 @@ def _assign_columns_by_type(df: pd.DataFrame, file_type_hint: str):
 
     if file_type_hint == "spec_pol":
         if ncol != 6:
-            return None, f"Spec (pol) 期望6列，但有 {ncol} 列"
+            return None, f"Spec (pol) expects 6 columns, but got {ncol}"
         df = df.copy()
         df.columns = ["Wav", "Int", "Pol", "Null1", "Null2", "sigma_int"]
         x_col = "Wav"
     elif file_type_hint == "spec_i":
         if ncol != 3:
-            return None, f"Spec (I) 期望3列，但有 {ncol} 列"
+            return None, f"Spec (I) expects 3 columns, but got {ncol}"
         df = df.copy()
         df.columns = ["Wav", "Int", "sigma_int"]
         x_col = "Wav"
     elif file_type_hint == "spec_i_simple":
         if ncol != 2:
-            return None, f"Spec (I, simple) 期望2列，但有 {ncol} 列"
+            return None, f"Spec (I, simple) expects 2 columns, but got {ncol}"
         df = df.copy()
         df.columns = ["Wav", "Int"]
         x_col = "Wav"
     elif file_type_hint == "lsd_pol":
         if ncol != 7:
-            return None, f"LSD (pol) 期望7列，但有 {ncol} 列"
+            return None, f"LSD (pol) expects 7 columns, but got {ncol}"
         df = df.copy()
         df.columns = [
             "RV", "Int", "sigma_int", "Pol", "sigma_pol", "Null1",
@@ -153,18 +153,18 @@ def _assign_columns_by_type(df: pd.DataFrame, file_type_hint: str):
         x_col = "RV"
     elif file_type_hint == "lsd_i":
         if ncol != 3:
-            return None, f"LSD (I) 期望3列，但有 {ncol} 列"
+            return None, f"LSD (I) expects 3 columns, but got {ncol}"
         df = df.copy()
         df.columns = ["RV", "Int", "sigma_int"]
         x_col = "RV"
     elif file_type_hint == "lsd_i_simple":
         if ncol != 2:
-            return None, f"LSD (I, simple) 期望2列，但有 {ncol} 列"
+            return None, f"LSD (I, simple) expects 2 columns, but got {ncol}"
         df = df.copy()
         df.columns = ["RV", "Int"]
         x_col = "RV"
     else:
-        return None, f"未知文件类型: {file_type_hint}"
+        return None, f"Unknown file type: {file_type_hint}"
     return (df, x_col), None
 
 
@@ -177,7 +177,7 @@ def _heuristic_guess(df: pd.DataFrame):
         return None, None
 
     if ncol == 6:
-        # 统一约定：6 列仅可能为波长域 spec_pol（Wav Int Pol Null1 Null2 sigma_int）
+        # Convention: 6 columns can only be wavelength domain spec_pol (Wav Int Pol Null1 Null2 sigma_int)
         return "spec_pol", _assign_columns_by_type(df, "spec_pol")[0]
     if ncol == 7:
         return "lsd_pol", _assign_columns_by_type(df, "lsd_pol")[0]
@@ -221,7 +221,7 @@ def detect_and_assign_columns(df: pd.DataFrame, file_type_hint: str = "auto"):
     if file_type_hint == "auto":
         guessed_type, res = _heuristic_guess(df)
         if guessed_type is None or res is None:
-            return None, "无法自动判别数据类型，请手动指定文件类型"
+            return None, "Cannot automatically determine data type, please specify file type manually"
         (df_named, x_col) = res
         return (df_named, x_col, guessed_type), None
     else:
@@ -267,9 +267,9 @@ class ObservationProfile:
         self.null = np.asarray(
             null, dtype=float) if null is not None else np.zeros_like(specI)
         self.profile_type = profile_type
-        # 新增：记录偏振通道（I/V/Q/U）
+        # New: Record polarization channel (I/V/Q/U)
         self.pol_channel = pol_channel.upper() if pol_channel else "V"
-        # 标记可用的偏振分量
+        # Mark available polarization components
         comps = {'I'}
         if self.specV is not None and np.any(self.specV != 0.0):
             comps.add('V')
@@ -408,13 +408,13 @@ def write_model_spectrum(filename: str,
                          pol_channel: str = 'V',
                          include_null: bool = False,
                          file_type_hint: Optional[str] = None) -> None:
-    """将模型光谱写入文件。
+    """Write model spectrum to file.
 
-    默认输出：
-      - fmt="lsd": 速度域 (km/s) 列：RV Int sigma_int V Q U 或扩展 7 列 LSD(pol) 格式
-      - fmt="spec": 波长域 (nm) 列：Wav Int sigma_int V Q U
+    Default output:
+      - fmt="lsd": Velocity domain (km/s) columns: RV Int sigma_int V Q U or extended 7 columns LSD(pol) format
+      - fmt="spec": Wavelength domain (nm) columns: Wav Int sigma_int V Q U
 
-        为保证与解析类型一致，建议在需要特定结构时显式传入 file_type_hint（如 'spec_pol'）。
+        To ensure consistency with parsing types, it is recommended to explicitly pass file_type_hint (e.g., 'spec_pol') when a specific structure is needed.
     """
     x = np.asarray(x, dtype=float)
     Iprof = np.asarray(Iprof, dtype=float)
@@ -428,20 +428,20 @@ def write_model_spectrum(filename: str,
     pol_channel = (pol_channel or 'V').upper()
 
     # ------------------------------------------------------------------
-    # 自动推断输出格式（若未显式指定 file_type_hint）
+    # Automatically infer output format (if file_type_hint is not explicitly specified)
     # ------------------------------------------------------------------
     if file_type_hint is None:
-        # 根据 pol_channel 和 fmt 自动选择合适的输出格式
+        # Automatically select appropriate output format based on pol_channel and fmt
         if pol_channel == 'I':
-            # I 通道：输出 spec_i 或 lsd_i 格式（3列）
+            # I channel: output spec_i or lsd_i format (3 columns)
             file_type_hint = 'lsd_i' if fmt == 'lsd' else 'spec_i'
         else:
-            # V/Q/U 通道：输出 spec_pol 或 lsd_pol 格式
+            # V/Q/U channel: output spec_pol or lsd_pol format
             file_type_hint = 'lsd_pol' if fmt == 'lsd' else 'spec_pol'
 
     # ------------------------------------------------------------------
-    # 显式文件类型输出（优先级高于 fmt/force_input_structure）
-    # 支持：spec_pol, spec_i, spec_i_simple, lsd_pol, lsd_i, lsd_i_simple
+    # Explicit file type output (priority higher than fmt/force_input_structure)
+    # Supports: spec_pol, spec_i, spec_i_simple, lsd_pol, lsd_i, lsd_i_simple
     # ------------------------------------------------------------------
     if file_type_hint is not None:
         fth = file_type_hint.lower()
@@ -543,10 +543,10 @@ def write_model_spectrum(filename: str,
                     f.write(f"{x[i]:.6f} {Iprof[i]:.8e}\n")
             return
 
-    # 已弃用：不再强制匹配输入文件结构；请使用 file_type_hint 指定输出结构。
+    # Deprecated: No longer force matching input file structure; please use file_type_hint to specify output structure.
 
     if fmt == 'lsd' and pol_channel in ('V', 'Q', 'U') and include_null:
-        # 写出 LSD(pol) 7列格式：RV Int sigma_int Pol sigma_pol Null1 sigma_null1
+        # Write LSD(pol) 7-column format: RV Int sigma_int Pol sigma_pol Null1 sigma_null1
         if pol_channel == 'V':
             pol = V if V is not None else np.zeros_like(Iprof)
         elif pol_channel == 'Q':
@@ -570,7 +570,7 @@ def write_model_spectrum(filename: str,
                     f"{x[i]:.6f} {Iprof[i]:.8e} {sigmaI[i]:.3e} {pol[i]:.8e} {sigma_pol[i]:.3e} {null1[i]:.8e} {sigma_null1[i]:.3e}\n"
                 )
     else:
-        # 通用格式：RV/Wav Int sigma_int V Q U（永远写出 V/Q/U 列，缺失则填 0）
+        # Generic format: RV/Wav Int sigma_int V Q U (Always write V/Q/U columns, fill with 0 if missing)
         cols = [name_x, "Int", "sigma_int", "V", "Q", "U"]
         Vw = np.zeros_like(Iprof) if V is None else V
         Qw = np.zeros_like(Iprof) if Q is None else Q
@@ -591,8 +591,8 @@ def save_results_series(results: List[Tuple[np.ndarray, np.ndarray,
                         basepath: str = "model_phase",
                         fmt: str = "lsd") -> List[str]:
     """
-    将 tomography.main 的结果列表 [(x, I, V), ...] 保存为多文件。
-    返回写出的文件路径列表。
+    Save tomography.main result list [(x, I, V), ...] to multiple files.
+    Return list of written file paths.
     """
     paths = []
     for i, (x, I, V) in enumerate(results):
@@ -611,50 +611,50 @@ def save_model_spectra_with_polchannel(
     file_type_hint="spec",
     verbose=0,
 ):
-    """保存合成谱线，按 pol_channel 选择 Stokes 分量。
+    """Save synthesized spectra, selecting Stokes component by pol_channel.
 
-    将 phase_results 中的各相位合成谱线按指定的偏振通道保存为文件。
-    每个相位生成一个文件：
+    Save synthesized spectra for each phase in phase_results as files according to the specified polarization channel.
+    One file per phase:
     phase_{phase_index:04d}_{HJD}_{VRinfo}_{channel}.{ext}
 
     Parameters
     ----------
     phase_results : list of dict
-        各相位结果列表，每项为字典，包含：
-        - 'phase': int，相位索引
-        - 'wl': np.ndarray，波长
-        - 'I': np.ndarray，Stokes I
-        - 'V': np.ndarray or None，Stokes V
-        - 'Q': np.ndarray or None，Stokes Q
-        - 'U': np.ndarray or None，Stokes U
-        - 'sigma': np.ndarray，误差
-        - 'HJD': float，修正儒略日
-        - 'VRinfo': str，速度信息字符串
+        List of results for each phase, each item is a dictionary containing:
+        - 'phase': int, phase index
+        - 'wl': np.ndarray, wavelength
+        - 'I': np.ndarray, Stokes I
+        - 'V': np.ndarray or None, Stokes V
+        - 'Q': np.ndarray or None, Stokes Q
+        - 'U': np.ndarray or None, Stokes U
+        - 'sigma': np.ndarray, error
+        - 'HJD': float, Heliocentric Julian Date
+        - 'VRinfo': str, velocity info string
     pol_channel : str, default="I"
-        偏振通道选择，可选值为 "I", "V", "Q", "U"
+        Polarization channel selection, options are "I", "V", "Q", "U"
     output_dir : str, default="output/outModelSpec"
-        输出目录路径
+        Output directory path
     file_type_hint : str, default="spec"
-        文件格式提示，传递给 write_model_spectrum
-        (支持 "spec_pol", "spec_i", "lsd_pol", "lsd_i" 等)
+        File format hint, passed to write_model_spectrum
+        (supports "spec_pol", "spec_i", "lsd_pol", "lsd_i", etc.)
     verbose : int, default=0
-        详细程度 (0=安静, 1=正常, 2=详细)
+        Verbosity level (0=silent, 1=normal, 2=detailed)
 
     Returns
     -------
     list of str
-        写出的文件路径列表
+        List of written file paths
     """
     from pathlib import Path
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # 映射 pol_channel 到数据字段
+    # Map pol_channel to data fields
     channel_map = {"I": "I", "V": "V", "Q": "Q", "U": "U"}
     if pol_channel not in channel_map:
         raise ValueError(
-            f"pol_channel 必须为 'I', 'V', 'Q', 或 'U'，收到 '{pol_channel}'")
+            f"pol_channel must be 'I', 'V', 'Q', or 'U', got '{pol_channel}'")
 
     paths = []
     for res in phase_results:
@@ -666,10 +666,11 @@ def save_model_spectra_with_polchannel(
 
         if wl is None:
             if verbose:
-                print(f"[SpecIO] 跳过相位 {phase_idx}：无波长数据")
+                print(
+                    f"[SpecIO] Skipping phase {phase_idx}: No wavelength data")
             continue
 
-        # 选择指定的 Stokes 分量
+        # Select specified Stokes component
         if pol_channel == "I":
             data = res.get("I")
         elif pol_channel == "V":
@@ -683,21 +684,23 @@ def save_model_spectra_with_polchannel(
 
         if data is None:
             if verbose:
-                print(f"[SpecIO] 相位 {phase_idx} 缺少 {pol_channel} 数据，跳过")
+                print(
+                    f"[SpecIO] Phase {phase_idx} missing {pol_channel} data, skipping"
+                )
             continue
 
-        # 构建文件名
+        # Construct filename
         HJD_str = f"{HJD:.3f}".replace(".", "p")
         filename = (
             f"phase_{phase_idx:04d}_HJD{HJD_str}_{VRinfo}_{pol_channel}.spec")
         filepath = output_path / filename
 
-        # 准备其他 Stokes 分量（缺失则为 None）
+        # Prepare other Stokes components (None if missing)
         V_data = res.get("V") if pol_channel != "V" else None
         Q_data = res.get("Q") if pol_channel != "Q" else None
         U_data = res.get("U") if pol_channel != "U" else None
 
-        # 调用 write_model_spectrum 保存
+        # Call write_model_spectrum to save
         header = {
             "phase": str(phase_idx),
             "HJD": str(HJD),
@@ -719,13 +722,14 @@ def save_model_spectra_with_polchannel(
             paths.append(str(filepath))
             if verbose:
                 print(
-                    f"[SpecIO] 已保存相位 {phase_idx} {pol_channel} 通道到 {filename}")
+                    f"[SpecIO] Saved phase {phase_idx} {pol_channel} channel to {filename}"
+                )
         except Exception as e:
             if verbose:
-                print(f"[SpecIO] 保存相位 {phase_idx} 失败：{e}")
+                print(f"[SpecIO] Failed to save phase {phase_idx}: {e}")
             continue
 
     if verbose:
-        print(f"[SpecIO] 共保存 {len(paths)} 个谱线文件")
+        print(f"[SpecIO] Saved {len(paths)} spectrum files")
 
     return paths

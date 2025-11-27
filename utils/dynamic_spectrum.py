@@ -35,6 +35,7 @@ class IrregularDynamicSpectrum:
         self.N = len(times)
 
     def plot(self,
+             ax=None,
              xlim=None,
              ylim=None,
              cmap='viridis',
@@ -46,12 +47,16 @@ class IrregularDynamicSpectrum:
              title='Dynamic Spectrum',
              time_widths=None,
              xlabel='Velocity (km/s)',
-             ylabel='Phase'):
+             ylabel='Phase',
+             colorbar=True,
+             cbar_label='Intensity (I/Ic)'):
         """
         Plot irregular dynamic spectrum.
 
         Parameters
         ----------
+        ax : matplotlib.axes.Axes or None
+            Axes to plot on. If None, create new figure and axes.
         xlim, ylim : tuple or None
             Axis limits
         cmap : str
@@ -70,12 +75,20 @@ class IrregularDynamicSpectrum:
             Time width for each spectrum strip; if None, calculated automatically from adjacent time differences
         xlabel, ylabel : str
             Axis labels
+        colorbar : bool
+            Whether to show colorbar
+        cbar_label : str
+            Label for colorbar
             
         Returns
         -------
         fig, ax : matplotlib figure and axes
         """
-        fig, ax = plt.subplots(figsize=(10, 6))
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 6))
+        else:
+            fig = ax.figure
+
         ax.set_facecolor(gap_color)
 
         times = self.times
@@ -156,9 +169,9 @@ class IrregularDynamicSpectrum:
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
-        if last_mesh is not None:
+        if last_mesh is not None and colorbar:
             cb = fig.colorbar(last_mesh, ax=ax)
-            cb.set_label('Intensity (I/Ic)')
+            cb.set_label(cbar_label)
         plt.tight_layout()
         return fig, ax
 

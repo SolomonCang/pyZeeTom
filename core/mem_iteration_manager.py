@@ -1,62 +1,30 @@
 """
-core/iteration_manager.py - MEM 反演迭代过程管理器
+core/iteration_manager.py - MEM Inversion Iteration Process Manager
 
-功能：
-  - IterationManager: 统一管理反演迭代过程
-  - ConvergenceChecker: 高效的收敛检查
-  - 集成 ProgressMonitor 和 IterationHistory
+Features:
+  - IterationManager: Unified management of inversion iteration process
+  - ConvergenceChecker: Efficient convergence checking
+  - Integration of ProgressMonitor and IterationHistory
 """
 
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
-
-# 可选导入优化组件
-try:
-    from core.mem_monitoring import ProgressMonitor, IterationHistory
-except ImportError:
-    # 定义哑类以避免 NoneType 错误
-    class ProgressMonitor:  # type: ignore
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def on_iteration_start(self):
-            pass
-
-        def on_iteration_complete(self, *args):
-            pass
-
-        def get_summary(self):
-            return {}
-
-    class IterationHistory:  # type: ignore
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def record_iteration(self, *args, **kwargs):
-            pass
-
-        def get_summary(self):
-            return {}
-
-        def get_history(self):
-            return {}
+from core.mem_monitoring import ProgressMonitor, IterationHistory
 
 
 class ConvergenceChecker:
     """
-    高效的收敛判定器
+    Efficient Convergence Checker
     
-    功能：
-    - 增量式收敛检查（避免重复计算）
-    - 支持多种收敛准则
-    - 停滞检测（连续无进展）
+    Features:
+    - Incremental convergence check (avoid repeated calculations)
+    - Support multiple convergence criteria
+    - Stagnation detection (continuous no progress)
     
-    属性：
-      threshold: float - 收敛阈值
-      stall_count: int - 连续停滞次数
-      prev_chi2: Optional[float] - 前一迭代的χ²值
+    Attributes:
+      threshold: float - Convergence threshold
+      stall_count: int - Consecutive stagnation count
+      prev_chi2: Optional[float] - Previous iteration chi-squared value
     """
 
     def __init__(self,
@@ -64,12 +32,12 @@ class ConvergenceChecker:
                  stall_threshold: int = 5,
                  verbose: int = 0):
         """
-        初始化收敛检查器
+        Initialize convergence checker
         
-        参数：
-          convergence_threshold: 相对变化阈值（默认 1e-6）
-          stall_threshold: 停滞迭代数阈值（默认 5）
-          verbose: 输出级别
+        Parameters:
+          convergence_threshold: Relative change threshold (default 1e-6)
+          stall_threshold: Stagnation iteration count threshold (default 5)
+          verbose: Output level
         """
         self.threshold = convergence_threshold
         self.stall_threshold = stall_threshold
@@ -81,32 +49,32 @@ class ConvergenceChecker:
 
     def check(self, chi2: float) -> Tuple[bool, str]:
         """
-        检查是否满足收敛条件
+        Check if convergence conditions are met
         
-        参数：
-          chi2: 当前χ²值
+        Parameters:
+          chi2: Current chi-squared value
         
-        返回：
+        Returns:
           (should_stop, reason)
-          - should_stop: 是否应停止迭代
-          - reason: 停止原因（或空字符串）
+          - should_stop: Whether to stop iteration
+          - reason: Stop reason (or empty string)
         """
-        # 首次迭代，无法判断
+        # First iteration, cannot judge
         if self.prev_chi2 is None:
             self.prev_chi2 = chi2
             return False, ""
 
-        # 计算相对变化
+        # Calculate relative change
         chi2_change = abs(chi2 - self.prev_chi2) / (abs(self.prev_chi2) +
                                                     1e-20)
 
-        # 检查是否收敛
+        # Check for convergence
         if chi2_change < self.threshold:
             self.consecutive_small_changes += 1
         else:
             self.consecutive_small_changes = 0
 
-        # 连续多次小变化 → 收敛
+        # Consecutive small changes -> Convergence
         if self.consecutive_small_changes >= self.stall_threshold:
             return True, f"convergence (Δχ²={chi2_change:.3e})"
 
@@ -114,7 +82,7 @@ class ConvergenceChecker:
         return False, ""
 
     def reset(self) -> None:
-        """重置检查器状态"""
+        """Reset checker state"""
         self.prev_chi2 = None
         self.stall_count = 0
         self.consecutive_small_changes = 0
@@ -122,25 +90,25 @@ class ConvergenceChecker:
 
 class IterationManager:
     """
-    统一管理 MEM 反演迭代过程
+    Unified management of MEM inversion iteration process
     
-    功能：
-    - 集中化迭代计数和控制
-    - 集成进度监控（ProgressMonitor）
-    - 集成迭代历史（IterationHistory）
-    - 统一收敛判定（ConvergenceChecker）
-    - 检查点管理（可选）
+    Features:
+    - Centralized iteration counting and control
+    - Integrated progress monitoring (ProgressMonitor)
+    - Integrated iteration history (IterationHistory)
+    - Unified convergence judgment (ConvergenceChecker)
+    - Checkpoint management (optional)
     
-    属性：
-      iteration: int - 当前迭代编号（从 0 开始）
-      max_iterations: int - 最大迭代数
-      convergence_reason: str - 停止原因
-      total_elapsed: float - 总耗时（秒）
+    Attributes:
+      iteration: int - Current iteration number (starting from 0)
+      max_iterations: int - Maximum number of iterations
+      convergence_reason: str - Stop reason
+      total_elapsed: float - Total elapsed time (seconds)
     
-    集成组件：
-      progress_monitor: ProgressMonitor (可选)
-      iteration_history: IterationHistory (可选)
-      convergence_checker: ConvergenceChecker (必需)
+    Integrated components:
+      progress_monitor: ProgressMonitor (optional)
+      iteration_history: IterationHistory (optional)
+      convergence_checker: ConvergenceChecker (required)
     """
 
     def __init__(
@@ -153,17 +121,17 @@ class IterationManager:
         verbose: int = 0,
     ):
         """
-        初始化迭代管理器
+        Initialize iteration manager
         
-        参数：
-          max_iterations: 最大迭代数
-          config: 配置字典（可选）
-            - 'convergence_threshold': 收敛阈值
-            - 'stall_threshold': 停滞阈值
-          use_progress_monitor: 是否启用进度监控
-          use_iteration_history: 是否启用迭代历史
-          convergence_threshold: 收敛阈值（覆盖 config）
-          verbose: 输出级别
+        Parameters:
+          max_iterations: Maximum number of iterations
+          config: Configuration dictionary (optional)
+            - 'convergence_threshold': Convergence threshold
+            - 'stall_threshold': Stagnation threshold
+          use_progress_monitor: Whether to enable progress monitoring
+          use_iteration_history: Whether to enable iteration history
+          convergence_threshold: Convergence threshold (overrides config)
+          verbose: Output level
         """
         self.iteration: int = 0
         self.max_iterations: int = max_iterations
@@ -172,19 +140,19 @@ class IterationManager:
         self.start_time: float = 0.0
         self.total_elapsed: float = 0.0
 
-        # 配置参数提取
+        # Extract configuration parameters
         config = config or {}
         actual_threshold = config.get('convergence_threshold',
                                       convergence_threshold)
         stall_threshold = config.get('stall_threshold', 5)
 
-        # 初始化收敛检查器（必需）
+        # Initialize convergence checker (required)
         self.convergence_checker = ConvergenceChecker(
             convergence_threshold=actual_threshold,
             stall_threshold=stall_threshold,
             verbose=verbose)
 
-        # 可选：进度监控
+        # Optional: Progress monitoring
         self.progress_monitor: Optional[ProgressMonitor] = None
         if use_progress_monitor and ProgressMonitor is not None:
             self.progress_monitor = ProgressMonitor(
@@ -192,16 +160,16 @@ class IterationManager:
                 verbose=verbose,
                 check_convergence=True)
 
-        # 可选：迭代历史
+        # Optional: Iteration history
         self.iteration_history: Optional[IterationHistory] = None
         if use_iteration_history and IterationHistory is not None:
             self.iteration_history = IterationHistory(verbose=verbose)
 
     def start_iteration(self) -> None:
         """
-        标记迭代开始
+        Mark iteration start
         
-        应在每次迭代的开始调用
+        Should be called at the start of each iteration
         """
         if self.iteration == 0:
             import time
@@ -222,26 +190,26 @@ class IterationManager:
         gradient_norm: Optional[float] = None,
     ) -> None:
         """
-        记录单次迭代的结果
+        Record results of a single iteration
         
-        参数：
-          chi2: 卡方统计量
-          entropy: 熵值
-          grad_S_norm: 熵梯度范数
-          grad_C_norm: 约束梯度范数
-          alpha: 步长（可选）
-          param_delta: 参数变化幅度（可选）
-          diagnostics: 诊断信息（可选）
-          gradient_norm: 兼容性参数（可选，若提供则用于 grad_C_norm）
+        Parameters:
+          chi2: Chi-squared statistic
+          entropy: Entropy value
+          grad_S_norm: Entropy gradient norm
+          grad_C_norm: Constraint gradient norm
+          alpha: Step size (optional)
+          param_delta: Parameter change magnitude (optional)
+          diagnostics: Diagnostic information (optional)
+          gradient_norm: Compatibility parameter (optional, used for grad_C_norm if provided)
         
-        异常：
-          ValueError: 任何数值为 NaN/Inf
+        Exceptions:
+          ValueError: Any value is NaN/Inf
         """
-        # 兼容性处理
+        # Compatibility handling
         if gradient_norm is not None and grad_C_norm == 0.0:
             grad_C_norm = gradient_norm
 
-        # 验证输入
+        # Validate input
         values = {
             'chi2': chi2,
             'entropy': entropy,
@@ -254,11 +222,11 @@ class IterationManager:
                 raise ValueError(
                     f"Invalid iteration record: {name}={val} (must be finite)")
 
-        # 更新进度监控
+        # Update progress monitoring
         if self.progress_monitor is not None:
             self.progress_monitor.on_iteration_complete(entropy)
 
-        # 更新迭代历史
+        # Update iteration history
         if self.iteration_history is not None:
             self.iteration_history.record_iteration(
                 iteration=self.iteration,
@@ -276,23 +244,23 @@ class IterationManager:
 
     def should_stop(self, chi2: Optional[float] = None) -> Tuple[bool, str]:
         """
-        检查是否应停止迭代
+        Check if iteration should stop
         
-        参数：
-          chi2: 当前χ²值（用于收敛检查）
+        Parameters:
+          chi2: Current chi-squared value (for convergence check)
         
-        返回：
+        Returns:
           (should_stop, reason)
-          - should_stop: 是否应停止
-          - reason: 停止原因
+          - should_stop: Whether to stop
+          - reason: Stop reason
         """
-        # 检查最大迭代数
+        # Check maximum iterations
         if self.iteration >= self.max_iterations:
             reason = f"max_iterations reached ({self.iteration}/{self.max_iterations})"
             self.convergence_reason = reason
             return True, reason
 
-        # 检查收敛条件
+        # Check convergence conditions
         if chi2 is not None:
             converged, reason = self.convergence_checker.check(chi2)
             if converged:

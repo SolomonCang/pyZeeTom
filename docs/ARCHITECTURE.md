@@ -1,93 +1,219 @@
-# pyZeeTom Project Architecture
 
-**Last Updated**: 2025-11-15
+# pyZeeTom Architecture Overview
+
+**Last Updated**: 2025-11-15  
 **Version**: Phase 2.5.4.1 (Refactoring Complete)
 
 ---
 
 ## Table of Contents
-1. [Project Overview](#project-overview)
-2. [Core Architecture Design](#core-architecture-design)
-3. [Module Details](#module-details)
-4. [Data Flow and Workflow](#data-flow-and-workflow)
-5. [Physical Model](#physical-model)
-6. [Extension and Integration](#extension-and-integration)
+1. Project Overview
+2. Layered Architecture
+3. Module Breakdown
+4. Data Flow & Workflow
+5. Physical Model
+6. Extensibility & Development
+7. References & Principles
 
 ---
 
-## Project Overview
+## 1. Project Overview
 
-**pyZeeTom** is a tomography tool for the inversion and forward modeling of 4 Stokes parameters (I, Q, U, V) polarization spectra.
+**pyZeeTom** is a tomography toolkit for forward modeling and inversion of 4 Stokes parameters (I, Q, U, V) polarization spectra, designed for stellar and circumstellar systems.
 
-### Physical Scenario
-- **Central Object + Circumstellar Matter**: A central object surrounded by circumstellar matter (dust clumps, disks, planets, small bodies, etc.) orbiting in rigid body or differential rotation.
-- **Phase Observation**: The observer and the central object are in the same inertial frame, observing different viewing angles only through the "phase" brought by the object's rotation.
-- **Multi-channel Observation**: Polarization spectra of Stokes I and VQU components can be obtained for each observation phase.
-- **Working Mode**: Currently focused on forward modeling, with MEM inversion methods to be introduced later.
+**Physical Scenario:**
+- Central object surrounded by circumstellar matter (disk, clumps, planets, etc.) in rigid or differential rotation
+- Observer and object share the inertial frame; phase changes provide different viewing angles
+- Multi-channel Stokes spectra for each phase
+- Forward modeling and MEM (Maximum Entropy Method) inversion supported
 
-### Key Features
-- ✓ Support for multiple observation data formats (LSD/spec/pol/I/V/Q/U)
-- ✓ Weak-field Gaussian Zeeman line profile and custom line models
-- ✓ Annular/Disk grid, supporting rigid body and differential rotation
-- ✓ Velocity space integration, synthesizing global Stokes spectra
-- ✓ Time evolution support: Disk structure changes due to differential rotation
-- ✓ Phase calculation: Automatically calculate observation phase based on JD, JD0, and period
-- ✓ MEM Inversion: Maximum Entropy Method to reconstruct magnetic field distribution
+**Key Features:**
+- Multi-format observation data (LSD/spec/pol/I/V/Q/U)
+- Weak-field Gaussian Zeeman and custom line models
+- Annular/disk grid, rigid/differential rotation
+- Velocity space integration for global Stokes synthesis
+- Time evolution: disk structure changes with rotation
+- Automatic phase calculation (JD, JD0, period)
+- MEM inversion for magnetic field reconstruction
 
 ---
 
-## Core Architecture Design
-
-### Layered Architecture
+## 2. Layered Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  User Interface Layer (UI Layer)                 │
-│  pyzeetom/tomography.py                         │
-│  - forward_tomography()                         │
-│  - inversion_tomography()                       │
-└────────────────┬────────────────────────────────┘
-                 │
-┌────────────────▼────────────────────────────────┐
-│  Workflow Execution Engine (Workflow Layer)      │
-│  - tomography_forward.py                        │
-│  - tomography_inversion.py                      │
-└────────────────┬────────────────────────────────┘
-                 │
-┌────────────────▼────────────────────────────────┐
-│  Config & Result Container (Config & Result Layer)│
-│  - tomography_config.py (ForwardModelConfig,   │
-│                         InversionConfig)       │
-│  - tomography_result.py (ForwardModelResult,   │
-│                         InversionResult)       │
-└────────────────┬────────────────────────────────┘
-                 │
-┌────────────────▼────────────────────────────────┐
-│  Physics Calculation Core (Physics & Integration Layer)│
-│  - velspace_DiskIntegrator.py                  │
-│    (Velocity Space Disk Integrator)             │
-│  - local_linemodel_basic.py                    │
-│    (Line Model)                                │
-│  - mem_tomography.py                           │
-│    (MEM Adapter)                               │
-└────────────────┬────────────────────────────────┘
-                 │
-┌────────────────▼────────────────────────────────┐
-│  Basic Utility Library (Utility Layer)           │
-│  - grid_tom.py (Grid Generation & Management)   │
-│  - disk_geometry.py (Disk Geometry)             │
-│  - SpecIO.py (Spectrum IO)                      │
-│  - mainFuncs.py (Parameter Parsing)             │
-│  - mem_generic.py (Generic MEM Algorithm)       │
-│  - iteration_manager.py (Inversion Iteration Ctrl)│
-│  - mem_optimization.py (MEM Optimization)       │
-│  - mem_monitoring.py (Monitoring & Logging)     │
-└─────────────────────────────────────────────────┘
+┌───────────── User Interface ─────────────┐
+│ pyzeetom/tomography.py                   │
+│   - forward_tomography()                 │
+│   - inversion_tomography()               │
+└───────────────┬─────────────────────────┘
+                     │
+┌───────────────▼─────────────────────────┐
+│ Workflow Engine                        │
+│   - tomography_forward.py              │
+│   - tomography_inversion.py            │
+└───────────────┬─────────────────────────┘
+                     │
+┌───────────────▼─────────────────────────┐
+│ Config & Result Layer                   │
+│   - tomography_config.py                │
+│   - tomography_result.py                │
+└───────────────┬─────────────────────────┘
+                     │
+┌───────────────▼─────────────────────────┐
+│ Physics Core                            │
+│   - velspace_DiskIntegrator.py          │
+│   - local_linemodel_basic.py            │
+│   - mem_tomography.py                   │
+└───────────────┬─────────────────────────┘
+                     │
+┌───────────────▼─────────────────────────┐
+│ Utility Layer                           │
+│   - grid_tom.py                         │
+│   - disk_geometry.py                    │
+│   - SpecIO.py                           │
+│   - mainFuncs.py                        │
+│   - mem_generic.py                      │
+│   - iteration_manager.py                │
+│   - mem_optimization.py                 │
+│   - mem_monitoring.py                   │
+└─────────────────────────────────────────┘
 ```
 
 ---
 
-## Module Details
+## 3. Module Breakdown
+
+### User Interface
+- **pyzeetom/tomography.py**: Main entry, provides `forward_tomography()` and `inversion_tomography()` APIs. Thin wrapper, unified error handling.
+
+### Workflow Engine
+- **core/tomography_forward.py**: Forward synthesis engine. Validates config, runs velocity space integration, aggregates results.
+- **core/tomography_inversion.py**: MEM inversion engine. Manages iterations, optimization, convergence, and result aggregation.
+
+### Config & Result Layer
+- **core/tomography_config.py**: Dataclass containers for forward/inversion config. Type safety, validation, serialization.
+- **core/tomography_result.py**: Unified result containers for forward and inversion outputs.
+
+### Physics Core
+- **core/velspace_DiskIntegrator.py**: Disk velocity field modeling, Stokes synthesis, velocity space integration, derivatives for inversion.
+- **core/local_linemodel_basic.py**: Weak-field Zeeman line model. Extensible for custom line models.
+- **core/mem_tomography.py**: Adapter between generic MEM optimizer and project-specific parameterization.
+
+### Utility Layer
+- **core/grid_tom.py**: Disk grid generation and management (equal Δr rings, vectorized arrays).
+- **core/disk_geometry.py**: Disk geometry and dynamics parameter container.
+- **core/SpecIO.py**: Spectrum I/O, multi-format support.
+- **core/mainFuncs.py**: Parameter parsing, backward compatibility.
+- **core/mem_generic.py**: Generic MEM algorithm, project-agnostic.
+- **core/iteration_manager.py**: Iteration control, convergence, intermediate saving.
+- **core/mem_optimization.py**: Optimization acceleration, caching, data flow management.
+- **core/mem_monitoring.py**: Monitoring, logging, performance metrics.
+
+---
+
+## 4. Data Flow & Workflow
+
+### Forward Synthesis
+1. Read parameters (`mainFuncs.readParamsTomog`)
+2. Read observation data (`SpecIO.obsProfSetInRange`)
+3. Read line parameters (`LineData`)
+4. Build config (`ForwardModelConfig`)
+5. Validate config
+6. Run synthesis (`run_forward_synthesis`)
+7. For each phase:
+    - Compute velocity/B-field projection
+    - Local Stokes profile calculation
+    - Velocity space integration
+    - Aggregate results (`ForwardModelResult`)
+8. Output files: model spectra, summary
+
+### MEM Inversion
+1. Prepare forward results, obs data, initial B-field guess
+2. Build inversion config (`InversionConfig`)
+3. Run inversion (`run_mem_inversion`)
+4. Iteration manager controls optimization
+5. For each iteration:
+    - Compute synthetic spectra
+    - Calculate gradients, response matrix
+    - MEM optimization step
+    - Update B-field parameters
+    - Check convergence, save intermediate results
+6. Output files: inversion results, summary, intermediates
+
+---
+
+## 5. Physical Model
+
+### Disk Velocity Field
+- **Outer (r ≥ r₀):** Power-law rotation: Ω(r) = Ω₀ (r/r₀)^p
+- **Inner (r < r₀):** Smooth deceleration sequence
+- **Linear velocity:** v_φ(r) = r · Ω(r)
+
+### Line Model (Weak Field Approximation)
+- **Stokes I:** I(λ) = 1 + a · G(d)
+- **Stokes V:** V(λ) = C_g · B_los · a · G(d) · d/σ
+- **Stokes Q/U:** Q(λ) = -C_2 · B_perp² · a · G(d)/σ² · (1-2d²) · cos(2χ)
+                      U(λ) = -C_2 · B_perp² · a · G(d)/σ² · (1-2d²) · sin(2χ)
+  - G(d) = exp(-d²), d = (λ - λ₀)/σ
+
+### Doppler Shift
+- v = c · (λ - λ_ref)/λ_ref
+- ν = ν₀ · (1 - v/c)
+
+### Disk Integration
+- S_obs(λ) = Σ w_i · S_local(i, λ)
+
+---
+
+## 6. Extensibility & Development
+
+### Custom Line Model
+1. Inherit `BaseLineModel`, implement `compute_local_profile()`
+2. Return dict with I, V, Q, U arrays
+
+### New Observation Format
+1. Add parser in `SpecIO.py`, return `ObservationProfile`
+2. Integrate with `obsProfSetInRange()`
+
+### New Inversion Method
+1. Create new module (e.g., `tomography_mcmc.py`)
+2. Implement interface similar to `run_mem_inversion()`
+3. Use existing config/result containers
+4. Expose in main entry
+
+### Development Workflow
+1. Validate config (`config.validate()`)
+2. Run forward synthesis (`forward_tomography`)
+3. Run inversion (`inversion_tomography`)
+4. Extend models as needed
+5. Optimize performance (caching, monitoring)
+
+---
+
+## 7. References & Principles
+
+### Core Algorithms
+- Skilling & Bryan (1984): Maximum Entropy Image Reconstruction
+- Hobson & Lasenby (1998): Magnetic field inversion using entropy methods
+
+### Design Patterns
+- Layered architecture: UI → Config → Workflow → Physics → Utility
+- Type-safe config objects
+- Unified result containers
+- Adapter pattern for decoupling
+- Callback design for generic optimizers
+
+### Extensibility
+- New line model: Inherit `BaseLineModel`
+- New geometry: Edit `disk_geometry.py`
+- New obs format: Extend `SpecIO.py`
+- New inversion: Add workflow module
+
+---
+
+**Documentation is updated after major refactoring.**
+**Last Modified:** 2025-11-15
+**Contributors:** Tianqi Cang
 
 ### 1. User Interface Layer
 
@@ -874,4 +1000,4 @@ results = tomography.inversion_tomography('input/params.txt', verbose=2)
 
 **Documentation Maintenance**: Update after every major refactoring
 **Last Modified**: 2025-11-15
-**Contributors**: pyZeeTom development team
+**Contributors**: Tianqi Cang

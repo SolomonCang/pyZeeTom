@@ -30,10 +30,9 @@ from core.SpecIO import loadObsProfile, ObservationProfile
 # ==============================================================================
 CONFIG = {
     # --- Data Input Configuration ---
-    'params_file':
-    'input/intomog_ap149_05Dec06_updated.txt',  # Parameter file path
+    'params_file': 'input/intomog_ap149_update.txt',  # Parameter file path
     # 'model_dir': 'output/inverse_test',  # Directory containing spectrum files
-    'model_dir': 'output/ap149_test',
+    'model_dir': '/Users/tianqi/Documents/Project/mag2acc/ap149/Ha_spec',
     # Specify file list (optional)
     # None: Auto search (phase001.lsd, .s, .spec etc.)
     'file_list': None,
@@ -75,6 +74,9 @@ CONFIG = {
     False,  # Whether to remove baseline (subtract mean profile)
     'align_continuum':
     False,  # Whether to force align continuum (align edges to 1.0)
+
+    # --- Phase Configuration ---
+    'fold_phase': False,  # Whether to fold phases to 0-1 range and re-sort
 }
 # ==============================================================================
 
@@ -162,22 +164,73 @@ def load_model_spectra(model_dir,
     times = []
     obs_list = []
 
-    for i, f_path in enumerate(target_files):
+    # Create a list of (phase, file_path) tuples
+    phase_file_pairs = []
+    for i in range(len(target_files)):
+        phase_file_pairs.append((phases[i], target_files[i]))
+
+    # Sort pairs by phase (ascending)
+    # This ensures that the earliest phase corresponds to the first file in the sorted list, etc.
+    # BUT WAIT: The user request is "params_file time ascending -> file Index ascending".
+    # The original code assumed params_file order == file index order.
+    # If params_file is NOT sorted by time, then file index 0 might correspond to phase 0.8, and file index 1 to phase 0.1.
+    # If the file naming convention (phase001, phase002) implies a time sequence, then we should sort the phases first,
+    # and then assign file indices 0, 1, 2... to the sorted phases.
+
+    # Correct Logic:
+    # 1. Get all phases from params file.
+    # 2. Sort phases in ascending order.
+    # 3. Assign file index 0 to the smallest phase, index 1 to the next, etc.
+    # 4. Find files based on these new indices.
+
+    sorted_indices = np.argsort(phases)
+    sorted_phases = phases[sorted_indices]
+
+    print("  Re-ordering files based on phase ascending order...")
+
+    # Re-populate target_files based on sorted order
+    sorted_target_files = []
+    if file_list is not None:
+        # If file_list is provided, we assume it matches the original params order?
+        # Or should we also sort file_list? Usually file_list is explicit.
+        # Let's assume if file_list is given, the user knows what they are doing.
+        # But to be safe and consistent with the request:
+        limit = min(len(file_list), num_obs)
+        # We need to pick files from file_list in the same order as the sorted phases?
+        # This is ambiguous. If file_list is provided, we probably shouldn't mess with auto-indexing.
+        # Let's stick to the auto-search logic which relies on indices.
+        for i in range(limit):
+            sorted_target_files.append(Path(file_list[i]))
+            # Warning: This ignores the sorting logic if file_list is used.
+    else:
+        # Auto-search mode:
+        # We want file index 0 -> sorted_phases[0]
+        # We want file index 1 -> sorted_phases[1]
+        for i in range(num_obs):
+            # We look for file with index 'i' (0, 1, 2...)
+            # And associate it with sorted_phases[i]
+            f_path = find_file_for_index(model_dir, i)
+            if f_path is None:
+                print(
+                    f"  Warning: Could not find file for index {i} (Phase {sorted_phases[i]:.3f})"
+                )
+            sorted_target_files.append(f_path)
+
+    # Now we iterate through the SORTED phases and their corresponding files (by index 0, 1, 2...)
+    for i, f_path in enumerate(sorted_target_files):
         if f_path is None: continue
         if not f_path.exists():
             print(f"  Warning: File does not exist: {f_path}")
             continue
 
-        # Force use of SpecIO to read
         try:
-            # Note: loadObsProfile automatically handles I, V, Q, U columns
             obs = loadObsProfile(str(f_path), file_type=file_type)
         except Exception as e:
             print(f"  Error loading {f_path.name}: {e}")
             obs = None
 
         if obs is not None:
-            times.append(phases[i])
+            times.append(sorted_phases[i])  # Use the sorted phase
             obs_list.append(obs)
         else:
             print(f"  Warning: Failed to parse {f_path.name} with SpecIO.")
@@ -185,12 +238,8 @@ def load_model_spectra(model_dir,
     if len(times) == 0:
         raise FileNotFoundError("No valid spectra loaded.")
 
-    # Sort by phase
-    order = np.argsort(times)
-    sorted_times = np.array([times[i] for i in order])
-    sorted_obs = [obs_list[i] for i in order]
-
-    return sorted_times, sorted_obs
+    # No need to sort again, as we constructed them in sorted order
+    return np.array(times), obs_list
 
 
 def get_stokes_data(obs_list, stokes_char):
@@ -235,6 +284,18 @@ def main():
                                              file_list=file_list,
                                              file_type=CONFIG['file_type'])
         print(f"✓ Successfully loaded {len(times)} spectra")
+
+        # Apply phase folding if requested
+        if CONFIG.get('fold_phase', False):
+            print("Folding phases to 0-1 range...")
+            times = times % 1.0
+
+            # Re-sort by folded phase
+            sort_idx = np.argsort(times)
+            times = times[sort_idx]
+            obs_list = [obs_list[i] for i in sort_idx]
+            print("✓ Re-sorted spectra by folded phase")
+
     except Exception as e:
         print(f"✗ Error: {e}")
         return 1
@@ -331,38 +392,19 @@ def main():
                 vmin, vmax = CONFIG['vmin_pol'], CONFIG['vmax_pol']
                 cmap = 'RdBu_r'  # Polarization usually uses Red-Blue
 
-            # Note: IrregularDynamicSpectrum.plot creates a new figure, here we need to manually plot on ax
-            # We use pcolormesh directly
+            # Use IrregularDynamicSpectrum.plot directly
+            show_colorbar = (ax_idx == 1 or len(axes) == 1)
+            ylabel_arg = 'Rotation Phase' if ax_idx == 0 else ''
 
-            # Ensure all spectra are on the same grid (interpolate if necessary)
-            interpolated_intensities = []
-            for i, spec in enumerate(current_intensities):
-                # Check if grid matches x_sample
-                if len(spec) != len(x_sample) or not np.allclose(
-                        xs_list[i], x_sample):
-                    # Interpolate to x_sample grid
-                    interp_spec = np.interp(x_sample, xs_list[i], spec)
-                    interpolated_intensities.append(interp_spec)
-                else:
-                    interpolated_intensities.append(spec)
-
-            img_data = np.array(interpolated_intensities)
-            # img_data shape: (n_phases, n_pixels)
-
-            # Construct grid
-            X, Y = np.meshgrid(x_sample, times)
-
-            im = ax.pcolormesh(X,
-                               Y,
-                               img_data,
-                               cmap=cmap,
-                               vmin=vmin,
-                               vmax=vmax,
-                               shading='auto')
-            if ax_idx == 1 or len(axes) == 1:
-                plt.colorbar(im, ax=ax, label='Intensity')
-
-            ax.set_title(f'Dynamic Spectrum (Stokes {label})')
+            dynspec.plot(ax=ax,
+                         cmap=cmap,
+                         vmin=vmin,
+                         vmax=vmax,
+                         title=f'Dynamic Spectrum (Stokes {label})',
+                         xlabel=xlabel,
+                         ylabel=ylabel_arg,
+                         colorbar=show_colorbar,
+                         gap_thresh=0.03)
 
         # --- Mode 2: Stacked Lines (Waterfall) ---
         elif plot_mode == 'stacked':

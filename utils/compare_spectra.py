@@ -17,7 +17,7 @@ _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
 # Import custom modules
-# from utils.dynamic_spectrum import IrregularDynamicSpectrum
+from utils.dynamic_spectrum import IrregularDynamicSpectrum
 from core.mainFuncs import readParamsTomog, compute_phase_from_jd  # noqa: E402
 from core.SpecIO import loadObsProfile  # noqa: E402
 
@@ -25,9 +25,9 @@ from core.SpecIO import loadObsProfile  # noqa: E402
 #                                 Configuration Area
 # ==============================================================================
 CONFIG = {
-    'params_file': 'input/intomog_ap149_05Dec06_updated.txt',
+    'params_file': 'input/intomog_ap149_update.txt',
     'input_dir':
-    '/Users/tianqi/Documents/Project/mag2acc/ap149/05Dec06/int/Ha_spec',  # Observation data directory
+    '/Users/tianqi/Documents/Project/mag2acc/ap149/Ha_spec',  # Observation data directory
     'output_dir': 'output/ap149_test',  # Model data directory
 
     # Select Stokes parameter to display: 'I', 'V', 'Q', 'U'
@@ -43,6 +43,10 @@ CONFIG = {
     'cmap': 'RdBu_r',
     'vmin_res': -0.1,  # Residual color range (adjust based on signal strength)
     'vmax_res': 0.1,
+    'vmin_I': 0.85,
+    'vmax_I': 1.15,
+    'vmin_pol': -0.005,
+    'vmax_pol': 0.005,
 
     # --- Stacked Mode Config ---
     'stack_scale': 0.5,
@@ -52,6 +56,9 @@ CONFIG = {
     'line_width': 0.8,
     'remove_baseline': False,
     'align_continuum': False,
+
+    # --- Phase Configuration ---
+    'fold_phase': False,  # Whether to fold phases to 0-1 range and re-sort
 }
 # ==============================================================================
 
@@ -113,37 +120,48 @@ def load_spectra_set(data_dir, params_file, label="Data"):
 
     print(f"[{label}] Searching files in {data_dir} ...")
 
+    # Sort phases first to match dynamic_spec_plot logic
+    sorted_indices = np.argsort(phases)
+    sorted_phases = phases[sorted_indices]
+
     times = []
     obs_list = []
 
+    # We iterate through the sorted phases, but we need to find the file corresponding to the ORIGINAL index
+    # Wait, dynamic_spec_plot logic was:
+    # 1. Sort phases.
+    # 2. Assign file index 0 to smallest phase, 1 to next, etc.
+    # This assumes files are named phase000, phase001... corresponding to time order.
+
     for i in range(num_obs):
+        # i is the index in the sorted list (0 = earliest phase)
+        # We assume file naming follows this order
         f_path = find_file_for_index(data_dir, i)
 
         if f_path is None:
-            # Try matching without leading zeros
-            f_path = find_file_for_index(data_dir, i)
+            # Fallback: maybe files are indexed by original input order?
+            # If so, we should use sorted_indices[i] to find the file?
+            # But usually output files are generated in phase order or input order.
+            # If input order is random, output usually follows input.
+            # If input order is random, phase000 might be phase=0.8.
+            # But dynamic_spec_plot assumes phase000 is the earliest phase.
+            # Let's stick to dynamic_spec_plot logic: index i corresponds to i-th sorted phase.
+            pass
 
         if f_path is None or not f_path.exists():
             print(
-                f"  Warning: Missing file for index {i} (Phase {phases[i]:.3f})"
+                f"  Warning: Missing file for index {i} (Phase {sorted_phases[i]:.3f})"
             )
             continue
 
         try:
             obs = loadObsProfile(str(f_path), file_type=CONFIG['file_type'])
-            times.append(phases[i])
+            times.append(sorted_phases[i])
             obs_list.append(obs)
         except Exception as e:
             print(f"  Error loading {f_path.name}: {e}")
 
-    # Sort by phase
-    if times:
-        order = np.argsort(times)
-        sorted_times = np.array([times[i] for i in order])
-        sorted_obs = [obs_list[i] for i in order]
-        return sorted_times, sorted_obs
-    else:
-        return np.array([]), []
+    return np.array(times), obs_list
 
 
 def get_stokes_data(obs_list, stokes_char):
@@ -219,6 +237,24 @@ def main():
     if not np.allclose(times_in, times_out, atol=1e-4):
         print("Warning: Phases do not match exactly between input and output!")
 
+    # Apply phase folding if requested
+    if CONFIG.get('fold_phase', False):
+        print("Folding phases to 0-1 range...")
+
+        # Fold and sort Input
+        times_in = np.array(times_in) % 1.0
+        sort_idx_in = np.argsort(times_in)
+        times_in = times_in[sort_idx_in]
+        obs_in = [obs_in[i] for i in sort_idx_in]
+
+        # Fold and sort Output
+        times_out = np.array(times_out) % 1.0
+        sort_idx_out = np.argsort(times_out)
+        times_out = times_out[sort_idx_out]
+        obs_out = [obs_out[i] for i in sort_idx_out]
+
+        print("✓ Re-sorted spectra by folded phase")
+
     # 4. Prepare Data
     xs_list_in = [obs.wl for obs in obs_in]
     xs_list_out = [obs.wl for obs in obs_out]
@@ -270,7 +306,7 @@ def main():
         data_out_I = [d - mean_I + 1.0
                       for d in data_out_I]  # Subtract SAME mean
 
-        if data_in_Pol:
+        if data_in_Pol is not None and data_out_Pol is not None:
             mean_P = np.mean(data_in_Pol, axis=0)
             data_in_Pol = [d - mean_P for d in data_in_Pol]
             data_out_Pol = [d - mean_P for d in data_out_Pol]
@@ -278,50 +314,108 @@ def main():
     # ==========================================================================
     # Plotting
     # ==========================================================================
-    if stokes_cfg == 'I':
-        fig, ax_main = plt.subplots(figsize=(6, 10))
-        axes = [ax_main]
-        pairs = [('I', data_in_I, data_out_I)]
+
+    # Define rows and columns
+    # If Image mode: 3 columns (Obs, Model, Residual)
+    # If Stacked mode: 1 column (Comparison)
+
+    axes_image = None
+    axes_stacked = None
+
+    if plot_mode == 'image':
+        nrows = 1 if stokes_cfg == 'I' else 2
+        ncols = 3
+        figsize = (16, 5 * nrows)
+        fig, axes_raw = plt.subplots(nrows,
+                                     ncols,
+                                     figsize=figsize,
+                                     sharex=True,
+                                     sharey=True)
+        if nrows == 1:
+            axes_image = axes_raw.reshape(1, -1)
+        else:
+            axes_image = axes_raw
     else:
-        fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(12, 10), sharey=True)
-        axes = [ax_l, ax_r]
-        pairs = [('I', data_in_I, data_out_I),
-                 (stokes_cfg, data_in_Pol, data_out_Pol)]
+        # Stacked mode
+        nrows = 1 if stokes_cfg == 'I' else 2
+        ncols = 1
+        figsize = (8, 10)
+        fig, axes_raw = plt.subplots(nrows,
+                                     ncols,
+                                     figsize=figsize,
+                                     sharex=True)
+        if nrows == 1:
+            axes_stacked = [axes_raw]  # Make it iterable
+        else:
+            axes_stacked = list(axes_raw)
+
+    # Prepare data pairs for iteration
+    # Each item: (Label, DataIn, DataOut, RowIndex)
+    plot_items = [('I', data_in_I, data_out_I, 0)]
+    if stokes_cfg != 'I' and data_in_Pol is not None and data_out_Pol is not None:
+        plot_items.append((stokes_cfg, data_in_Pol, data_out_Pol, 1))
 
     scale = CONFIG['stack_scale']
 
-    for ax_idx, ax in enumerate(axes):
-        label, d_in, d_out = pairs[ax_idx]
+    for label, d_in, d_out, row_idx in plot_items:
 
-        # --- Mode: Image (Residuals) ---
-        if plot_mode == 'image':
+        # --- Mode: Image (Obs, Model, Residual) ---
+        if plot_mode == 'image' and axes_image is not None:
             # Calculate Residuals
             residuals = [obs - mod for obs, mod in zip(d_in, d_out)]
 
-            # Setup limits
+            # Determine color limits
             if label == 'I':
-                vmin, vmax = CONFIG['vmin_res'], CONFIG['vmax_res']
-                # I residuals might be larger or smaller, usually small if fit is good
-                # Let's use same as Pol for now or config
+                vmin, vmax = CONFIG.get('vmin_I',
+                                        0.85), CONFIG.get('vmax_I', 1.15)
+                vmin_res, vmax_res = CONFIG['vmin_res'], CONFIG['vmax_res']
+                cmap = 'viridis'  # or gray
+                cmap_res = CONFIG['cmap']
             else:
-                vmin, vmax = CONFIG['vmin_res'], CONFIG['vmax_res']
+                vmin, vmax = CONFIG.get('vmin_pol',
+                                        -0.005), CONFIG.get('vmax_pol', 0.005)
+                vmin_res, vmax_res = CONFIG['vmin_res'], CONFIG['vmax_res']
+                cmap = 'RdBu_r'
+                cmap_res = CONFIG['cmap']
 
-            # Plot
-            img_data = np.array(residuals)
-            X, Y = np.meshgrid(x_sample, times_in)
+            # Data to plot
+            datasets = [d_in, d_out, residuals]
+            titles = [
+                f'Observed {label}', f'Model {label}', f'Residual {label}'
+            ]
+            cmaps = [cmap, cmap, cmap_res]
+            vmins = [vmin, vmin, vmin_res]
+            vmaxs = [vmax, vmax, vmax_res]
 
-            im = ax.pcolormesh(X,
-                               Y,
-                               img_data,
-                               cmap=CONFIG['cmap'],
-                               vmin=vmin,
-                               vmax=vmax,
-                               shading='auto')
-            plt.colorbar(im, ax=ax, label='Residual (Obs - Model)')
-            ax.set_title(f'Residuals Stokes {label}')
+            # Create uniform xs list since we interpolated data
+            xs_uniform = [x_sample] * len(times_in)
+
+            for col_idx in range(3):
+                ax = axes_image[row_idx, col_idx]
+                data_list = datasets[col_idx]
+
+                # Create IrregularDynamicSpectrum object
+                dynspec = IrregularDynamicSpectrum(np.array(times_in),
+                                                   xs_uniform, data_list)
+
+                # Plot
+                ylabel_arg = 'Rotation Phase' if col_idx == 0 else ''
+                xlabel_arg = xlabel if row_idx == nrows - 1 else ''
+                cbar_label_arg = 'Intensity' if col_idx < 2 else 'Residual'
+
+                dynspec.plot(ax=ax,
+                             cmap=cmaps[col_idx],
+                             vmin=vmins[col_idx],
+                             vmax=vmaxs[col_idx],
+                             title=titles[col_idx],
+                             xlabel=xlabel_arg,
+                             ylabel=ylabel_arg,
+                             colorbar=True,
+                             cbar_label=cbar_label_arg)
 
         # --- Mode: Stacked (Comparison) ---
-        elif plot_mode == 'stacked':
+        elif plot_mode == 'stacked' and axes_stacked is not None:
+            ax = axes_stacked[row_idx]
             pol_mult = CONFIG['pol_scale_mult'] if label != 'I' else 1.0
 
             for i in range(len(times_in)):
@@ -355,14 +449,15 @@ def main():
                         label='Model' if i == 0 else "")
 
             ax.set_title(f'Comparison Stokes {label}')
-            ax.legend(loc='upper right')
+            if row_idx == 0:
+                ax.legend(loc='upper right')
 
             # Set Y limits
             ax.set_ylim(times_in[0] - 0.1, times_in[-1] + 0.1)
             ax.set_xlim(x_sample[0], x_sample[-1])
 
-        ax.set_xlabel(xlabel)
-        if ax_idx == 0:
+            if row_idx == nrows - 1:
+                ax.set_xlabel(xlabel)
             ax.set_ylabel('Rotation Phase')
 
     plt.tight_layout()

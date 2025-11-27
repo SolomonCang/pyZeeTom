@@ -1,21 +1,37 @@
-"""完整的物理模型集成模块 (physical_model.py)
+r"""Complete Physical Model Integration Module (physical_model.py)
 
-整合核心物理与数值模块：
-  - grid_tom.py: 盘面网格生成
-  - disk_geometry.py: 盘几何与磁场参数容器
-  - velspace_DiskIntegrator.py: 速度空间积分与谱线合成
+This module serves as the central integration point for the physical modeling of the system.
+It coordinates the initialization and interaction of the following core components:
 
-该模块提供统一的物理模型初始化接口，接收 readParamsTomog 参数对象，
-生成完整的物理模型容器，支持正演与反演工作流。
+1.  **Grid Generation (`grid_tom.py`)**: Creates the spatial discretization of the stellar/disk surface (annular rings).
+2.  **Geometry & Physics (`disk_geometry.py`)**: Manages the physical properties on the grid, including:
+    *   **Magnetic Field**: Vector magnetic field distribution ($B_{los}$, $B_{\perp}$, $\chi$).
+    *   **Brightness/Response**: Local spectral line amplitude/weight ($amp$).
+    *   **Kinematics**: Velocity field calculation (rotation, differential rotation).
+3.  **Spectral Synthesis (`velspace_DiskIntegrator.py`)**: Performs the integration over the velocity space to synthesize Stokes profiles.
+
+Functionality
+-------------
+*   **Unified Initialization**: Provides a single interface (`create_physical_model`) to initialize the entire physical system from a parameter file (`readParamsTomog`).
+*   **Model Building**: The `PhysicalModelBuilder` class allows for step-by-step construction and customization of the model components.
+*   **State Management**: The `PhysicalModel` class acts as a container for the current state of the system, essential for both forward modeling and the iterative inversion process.
+
+Physics
+-------
+The model represents a rotating object (star or disk) where:
+*   The surface is divided into a grid of pixels.
+*   Each pixel has a local velocity vector determined by the rotation law (rigid or differential).
+*   Each pixel has a local magnetic field vector and intrinsic line profile properties.
+*   The observed spectrum is the integration of local profiles over the visible surface, accounting for Doppler shifts and projection effects.
 
 Classes
 -------
-PhysicalModelBuilder : 物理模型构建器，协调各子模块
-PhysicalModel : 完整的物理模型容器
+PhysicalModelBuilder : Builder class for coordinating the initialization of sub-modules.
+PhysicalModel : Data container holding the complete state of the physical model.
 
 Functions
 ---------
-create_physical_model : 便利函数，从 readParamsTomog 直接创建物理模型
+create_physical_model : Factory function to create a `PhysicalModel` instance directly from parameters.
 """
 
 import numpy as np
@@ -35,54 +51,54 @@ __all__ = [
 
 @dataclass
 class PhysicalModel:
-    """完整的物理模型容器。
+    """Complete physical model container.
     
-    包含盘面网格、几何参数、磁场配置、亮度分布以及速度空间积分器。
-    该容器提供了执行正演或反演所需的所有物理模型组件。
+    Contains disk grid, geometry parameters, magnetic field configuration, brightness distribution, and velocity space integrator.
+    This container provides all physical model components required for executing forward or inversion workflows.
     
     Attributes
     ----------
     par : readParamsTomog
-        原始参数对象（保留用于追踪）
+        Original parameter object (kept for tracking)
     grid : diskGrid
-        盘面网格（等Δr分层）
+        Disk grid (equal Δr stratification)
     geometry : SimpleDiskGeometry
-        盘几何容器（包含磁场参数和亮度分布）
+        Disk geometry container (contains magnetic field parameters and brightness distribution)
     integrator : VelspaceDiskIntegrator or None
-        速度空间积分器（延迟初始化）
+        Velocity space integrator (lazy initialization)
     
     Parameters from par
     -------------------
     inclination_deg : float
-        盘面倾角（度数）
+        Disk inclination (degrees)
     pOmega : float
-        差速转动指数
+        Differential rotation index
     period : float
-        自转周期（天）
+        Rotation period (days)
     radius : float
-        恒星半径 (R_sun)
+        Stellar radius (R_sun)
     vsini : float
-        视向赤道速度 (km/s)
+        Projected equatorial velocity (km/s)
     Vmax : float
-        网格最大速度 (km/s)
+        Grid maximum velocity (km/s)
     enable_stellar_occultation : int
-        恒星遮挡标志
+        Stellar occultation flag
     nRingsStellarGrid : int
-        网格环数
+        Number of grid rings
         
     Magnetic Field
     ---------------
     B_los : np.ndarray
-        视向磁场分量 (Gauss)
+        Line-of-sight magnetic field component (Gauss)
     B_perp : np.ndarray
-        垂直磁场强度 (Gauss)
+        Perpendicular magnetic field strength (Gauss)
     chi : np.ndarray
-        磁场方向角 (rad)
+        Magnetic field direction angle (rad)
     
     Spectral Amplitude (Response)
     ---------------------------
     amp : np.ndarray
-        谱线振幅（响应权重）(0-1)，用于调制发射/吸收
+        Spectral line amplitude (response weight) (0-1), used to modulate emission/absorption
     """
 
     par: readParamsTomog
@@ -90,33 +106,33 @@ class PhysicalModel:
     geometry: SimpleDiskGeometry
     integrator: Optional[VelspaceDiskIntegrator] = None
 
-    # 缓存速度相关的参数
+    # Cache velocity-related parameters
     _v_grid: np.ndarray = field(default_factory=lambda: np.array([]))
     _wl0: Optional[float] = None
     _line_model: Optional[Any] = None
 
     def __post_init__(self):
-        """验证物理模型的一致性。"""
+        """Validate physical model consistency."""
         self.validate()
 
     def validate(self) -> bool:
-        """验证物理模型参数的一致性和完整性。
+        """Validate consistency and completeness of physical model parameters.
         
-        检查项：
-        - grid 与 geometry 的像素数一致
-        - 磁场参数维度与像素数一致
-        - 亮度分布维度与像素数一致
-        - 参数数值范围合理
+        Check items:
+        - grid and geometry pixel counts match
+        - Magnetic field parameter dimensions match pixel count
+        - Brightness distribution dimensions match pixel count
+        - Parameter value ranges are reasonable
         
         Returns
         -------
         bool
-            验证通过返回 True，失败抛出 ValueError
+            Returns True if validation passes, raises ValueError if fails
         
         Raises
         ------
         ValueError
-            当参数不一致或范围不合理时抛出
+            Raised when parameters are inconsistent or ranges are unreasonable
         """
         npix_grid = self.grid.numPoints
         npix_geom = self.geometry.grid.numPoints
@@ -126,7 +142,7 @@ class PhysicalModel:
                 f"Grid pixel mismatch: grid.numPoints={npix_grid} vs "
                 f"geometry.grid.numPoints={npix_geom}")
 
-        # 磁场维度检查
+        # Magnetic field dimension check
         if len(self.geometry.B_los) != npix_grid:
             raise ValueError(f"B_los length ({len(self.geometry.B_los)}) != "
                              f"grid.numPoints ({npix_grid})")
@@ -137,12 +153,12 @@ class PhysicalModel:
             raise ValueError(f"chi length ({len(self.geometry.chi)}) != "
                              f"grid.numPoints ({npix_grid})")
 
-        # 谱线振幅维度检查
+        # Spectral line amplitude dimension check
         if len(self.geometry.amp) != npix_grid:
             raise ValueError(f"amp length ({len(self.geometry.amp)}) != "
                              f"grid.numPoints ({npix_grid})")
 
-        # 参数范围检查
+        # Parameter range check
         if self.par.inclination < 0 or self.par.inclination > 90:
             raise ValueError(
                 f"inclination out of range: {self.par.inclination}° "
@@ -163,12 +179,12 @@ class PhysicalModel:
         return True
 
     def get_summary(self) -> Dict[str, Any]:
-        """获取物理模型的摘要信息。
+        """Get summary information of the physical model.
         
         Returns
         -------
         dict
-            包含模型关键参数的字典
+            Dictionary containing key model parameters
         """
         return {
             'grid_npix': self.grid.numPoints,
@@ -187,21 +203,21 @@ class PhysicalModel:
                               B_los: Optional[np.ndarray] = None,
                               B_perp: Optional[np.ndarray] = None,
                               chi: Optional[np.ndarray] = None) -> None:
-        """更新磁场参数。
+        """Update magnetic field parameters.
         
         Parameters
         ----------
         B_los : np.ndarray, optional
-            视向磁场 (Gauss)
+            Line-of-sight magnetic field (Gauss)
         B_perp : np.ndarray, optional
-            垂直磁场强度 (Gauss)
+            Perpendicular magnetic field strength (Gauss)
         chi : np.ndarray, optional
-            磁场方向角 (rad)
+            Magnetic field direction angle (rad)
         
         Raises
         ------
         ValueError
-            当磁场维度不匹配时抛出
+            Raised when magnetic field dimensions do not match
         """
         npix = self.grid.numPoints
 
@@ -228,20 +244,20 @@ class PhysicalModel:
             self.geometry.chi = chi
 
     def update_amplitude(self, amp: np.ndarray) -> None:
-        """更新谱线振幅（响应权重）。
+        """Update spectral line amplitude (response weight).
         
-        谱线振幅用于调制发射/吸收，值域为 [0, 1]。
-        amp=1.0 表示最大发射，amp=0.0 表示无信号。
+        Spectral line amplitude is used to modulate emission/absorption, range [0, 1].
+        amp=1.0 means maximum emission, amp=0.0 means no signal.
         
         Parameters
         ----------
         amp : np.ndarray
-            谱线振幅 (归一化, 0-1)，长度应为 grid.numPoints
+            Spectral line amplitude (normalized, 0-1), length should be grid.numPoints
         
         Raises
         ------
         ValueError
-            当维度不匹配时抛出
+            Raised when dimensions do not match
         """
         npix = self.grid.numPoints
         amp = np.asarray(amp, dtype=float)
@@ -256,20 +272,20 @@ class PhysicalModel:
 
 
 class PhysicalModelBuilder:
-    """物理模型构建器，协调各子模块的初始化。
+    """Physical model builder, coordinating initialization of sub-modules.
     
-    提供灵活的方式来构建物理模型，支持分步初始化和自定义参数。
+    Provides a flexible way to build physical models, supporting step-by-step initialization and custom parameters.
     
     Parameters
     ----------
     par : readParamsTomog
-        参数对象
+        Parameter object
     verbose : int, default=1
-        详细程度 (0=安静, 1=正常, 2=详细)
+        Verbosity level (0=silent, 1=normal, 2=detailed)
     """
 
     def __init__(self, par: readParamsTomog, verbose: int = 1):
-        """初始化构建器。"""
+        """Initialize builder."""
         if not isinstance(par, readParamsTomog):
             raise TypeError(
                 f"par must be readParamsTomog instance, got {type(par)}")
@@ -283,45 +299,68 @@ class PhysicalModelBuilder:
                    r_in: Optional[float] = None,
                    r_out: Optional[float] = None,
                    target_pixels_per_ring: Optional[Any] = None) -> diskGrid:
-        """构建盘面网格。
+        """Build disk grid.
         
         Parameters
         ----------
         nr : int, optional
-            环数。如果未提供，将根据 r_out 自动调整以保持径向分辨率与 par 配置一致。
+            Number of rings. If not provided, automatically adjusted based on r_out to maintain radial resolution consistent with par configuration.
         r_in : float, optional
-            内半径 (R_sun)，默认0.0
+            Inner radius (R_sun), default 0.0
         r_out : float, optional
-            外半径 (R_sun)，默认从 par.r_out
+            Outer radius (R_sun), default from par.r_out
         target_pixels_per_ring : optional
-            每环像素数配置，支持 int 或类数组
+            Pixels per ring configuration, supports int or array-like
         
         Returns
         -------
         diskGrid
-            创建的网格对象
+            Created grid object
         """
-        # 1. 确定几何边界
+        # 1. Determine geometric boundaries
         r_in_val = float(r_in) if r_in is not None else 0.0
-        r_out_val = float(r_out) if r_out is not None else float(
-            getattr(self.par, 'r_out', 5.0))
 
-        # 2. 确定环数 nr
+        # Logic: Determine r_out from Vmax if provided (Projected velocity limit)
+        par_r_out = float(getattr(self.par, 'r_out', 0.0))
+        par_Vmax = float(getattr(self.par, 'Vmax', 0.0))
+
+        if r_out is not None:
+            r_out_val = float(r_out)
+        elif par_Vmax > 1e-6:
+            # Calculate from Vmax using vsini (projected) to ensure independence from inclination
+            vsini = float(getattr(self.par, 'vsini', 10.0))
+            pOmega = float(getattr(self.par, 'pOmega', 0.0))
+            radius = float(getattr(self.par, 'radius', 1.0))
+
+            # Avoid division by zero or invalid power
+            if abs(vsini) > 1e-9 and abs(pOmega + 1.0) > 1e-6:
+                r_out_stellar = (par_Vmax / vsini)**(1.0 / (pOmega + 1.0))
+                r_out_val = radius * r_out_stellar
+                if self.verbose:
+                    print(
+                        f"[PhysicalModelBuilder] Calculated r_out={r_out_val:.2f} from Vmax={par_Vmax:.1f}, vsini={vsini:.1f}"
+                    )
+            else:
+                r_out_val = par_r_out if par_r_out > 0 else 5.0
+        else:
+            r_out_val = par_r_out if par_r_out > 0 else 5.0
+
+        # 2. Determine number of rings nr
         if nr is not None:
             nr_val = int(nr)
         else:
-            # 自动调整逻辑：保持径向分辨率
+            # Auto-adjustment logic: maintain radial resolution
             par_nr = int(getattr(self.par, 'nRingsStellarGrid', 60))
             par_r_out = float(getattr(self.par, 'r_out', 5.0))
 
-            # 如果 r_out 显著改变，则调整 nr 以保持 dr 不变
-            # 假设 par 配置是基于 r_in=0 的（通常情况）
+            # If r_out changes significantly, adjust nr to keep dr constant
+            # Assuming par config is based on r_in=0 (usual case)
             if abs(r_out_val - par_r_out) > 1e-6 and par_r_out > 0:
                 # base_dr = par_r_out / par_nr
                 # new_nr = (r_out - r_in) / base_dr
                 base_dr = par_r_out / max(par_nr, 1)
                 nr_val = int(np.ceil((r_out_val - r_in_val) / base_dr))
-                # 确保至少有 1 个环
+                # Ensure at least 1 ring
                 nr_val = max(1, nr_val)
 
                 if self.verbose:
@@ -350,25 +389,25 @@ class PhysicalModelBuilder:
                        B_perp: Optional[np.ndarray] = None,
                        chi: Optional[np.ndarray] = None,
                        amp: Optional[np.ndarray] = None) -> SimpleDiskGeometry:
-        """构建盘几何容器。
+        """Build geometry object.
         
         Parameters
         ----------
         grid : diskGrid, optional
-            盘面网格（默认使用 build_grid 创建的网格）
+            Grid object (default uses grid created by build_grid).
         B_los : np.ndarray, optional
-            视向磁场 (Gauss)
+            Line-of-sight magnetic field (Gauss).
         B_perp : np.ndarray, optional
-            垂直磁场强度 (Gauss)
+            Perpendicular magnetic field strength (Gauss).
         chi : np.ndarray, optional
-            磁场方向角 (rad)
+            Magnetic field direction angle (rad).
         amp : np.ndarray, optional
-            谱线振幅分布（响应权重, >0），直接来自几何
+            Spectral line amplitude distribution (response weight, >0), directly from geometry.
         
         Returns
         -------
         SimpleDiskGeometry
-            创建的几何容器
+            Created geometry container.
         """
         if grid is None:
             if self._grid is None:
@@ -395,30 +434,30 @@ class PhysicalModelBuilder:
                          v_grid: Optional[np.ndarray] = None,
                          line_model: Optional[Any] = None,
                          **integrator_kwargs) -> VelspaceDiskIntegrator:
-        """构建速度空间积分器。
+        """Build velocity space integrator.
         
         Parameters
         ----------
         geometry : SimpleDiskGeometry, optional
-            盘几何容器（默认使用 build_geometry 创建的几何）
+            Geometry object (default uses geometry created by build_geometry).
         wl0_nm : float, default=656.3
-            谱线中心波长 (nm)
+            Central wavelength (nm).
         v_grid : np.ndarray, optional
-            速度网格 (km/s)
+            Velocity grid (km/s).
         line_model : optional
-            谱线模型对象（必需参数）
+            Line model object (required).
         **integrator_kwargs
-            其他传递给 VelspaceDiskIntegrator 的参数
+            Other arguments passed to VelspaceDiskIntegrator.
         
         Returns
         -------
         VelspaceDiskIntegrator
-            创建的积分器
+            Created integrator.
         
         Raises
         ------
         ValueError
-            当 line_model 为 None 时抛出
+            Raised when line_model is None.
         """
         if geometry is None:
             if self._geometry is None:
@@ -429,13 +468,13 @@ class PhysicalModelBuilder:
             raise ValueError(
                 "line_model is required for VelspaceDiskIntegrator")
 
-        # 自动从 par 提取速度参数 (如果未在 kwargs 中提供)
+        # Auto-extract velocity parameters from par (if not provided in kwargs)
         if 'disk_v0_kms' not in integrator_kwargs:
-            # 计算赤道速度 v_eq = vsini / sin(i)
+            # Calculate equatorial velocity v_eq = vsini / sin(i)
             vsini = float(getattr(self.par, 'vsini', 10.0))
             inc_deg = float(getattr(self.par, 'inclination', 60.0))
             inc_rad = np.deg2rad(inc_deg)
-            # 避免除以零
+            # Avoid division by zero
             if abs(np.sin(inc_rad)) > 1e-6:
                 v_eq = vsini / np.sin(inc_rad)
             else:
@@ -452,8 +491,8 @@ class PhysicalModelBuilder:
                 getattr(self.par, 'pOmega', 0))
 
         if 'disk_r0' not in integrator_kwargs:
-            # 优先使用 r0_rot (如果存在于 par)，否则使用 radius
-            # 注意：readParamsTomog 通常将 radius 存储为 par.radius
+            # Prefer r0_rot (if exists in par), otherwise use radius
+            # Note: readParamsTomog usually stores radius as par.radius
             integrator_kwargs['disk_r0'] = float(
                 getattr(self.par, 'radius', 1.0))
 
@@ -461,7 +500,7 @@ class PhysicalModelBuilder:
             integrator_kwargs['normalize_continuum'] = bool(
                 getattr(self.par, 'normalize_continuum', True))
 
-        # 生成默认速度网格（如果未提供）
+        # Generate default velocity grid (if not provided)
         if v_grid is None:
             Vmax = float(self.par.Vmax)
             dv = 1.0  # km/s per pixel (default)
@@ -493,40 +532,48 @@ class PhysicalModelBuilder:
               chi: Optional[np.ndarray] = None,
               amp: Optional[np.ndarray] = None,
               **grid_kwargs) -> PhysicalModel:
-        """完整构建物理模型（一站式接口）。
+        """Build complete physical model (one-stop interface).
         
         Parameters
         ----------
         wl0_nm : float, default=656.3
-            谱线中心波长 (nm)
+            Central wavelength (nm).
         v_grid : np.ndarray, optional
-            速度网格 (km/s)
+            Velocity grid (km/s).
         line_model : optional
-            谱线模型对象（必需参数）
+            Line model object (required).
         B_los : np.ndarray, optional
-            视向磁场 (Gauss)
+            Line-of-sight magnetic field (Gauss).
         B_perp : np.ndarray, optional
-            垂直磁场强度 (Gauss)
+            Perpendicular magnetic field strength (Gauss).
         chi : np.ndarray, optional
-            磁场方向角 (rad)
+            Magnetic field direction angle (rad).
         amp : np.ndarray, optional
-            谱线振幅分布（响应权重, >0），直接来自几何
+            Spectral line amplitude distribution (response weight, >0), directly from geometry.
         **grid_kwargs
-            传递给 build_grid 的关键字参数
+            Keyword arguments passed to build_grid.
         
         Returns
         -------
         PhysicalModel
-            完整的物理模型对象
+            Complete physical model object.
         """
-        # 分步构建
+        # Step-by-step build
         self.build_grid(**grid_kwargs)
         self.build_geometry(B_los=B_los, B_perp=B_perp, chi=chi, amp=amp)
         integrator = self.build_integrator(wl0_nm=wl0_nm,
                                            v_grid=v_grid,
                                            line_model=line_model)
 
-        # 组装物理模型
+        # Ensure geometry is not None
+        if self._geometry is None:
+            raise RuntimeError("Geometry object was not created successfully")
+
+        # Ensure grid is not None
+        if self._grid is None:
+            raise RuntimeError("Grid object was not created successfully")
+
+        # Assemble PhysicalModel
         model = PhysicalModel(
             par=self.par,
             grid=self._grid,
@@ -540,7 +587,7 @@ class PhysicalModelBuilder:
         )
 
         if self.verbose:
-            print(f"[PhysicalModelBuilder] Physical model built successfully")
+            print("[PhysicalModelBuilder] Physical model built successfully")
             print(f"  {model.geometry}")
             summary = model.get_summary()
             print(f"  Summary: {summary['grid_npix']} pixels, "
@@ -561,35 +608,35 @@ def create_physical_model(par: readParamsTomog,
                           amp: Optional[np.ndarray] = None,
                           verbose: int = 1,
                           **grid_kwargs) -> PhysicalModel:
-    """便利函数：直接从参数对象创建完整的物理模型。
-    
+    """Convenience function: create complete physical model directly from parameter object.
+
     Parameters
     ----------
     par : readParamsTomog
-        参数对象
+        Parameter object
     wl0_nm : float, default=656.3
-        谱线中心波长 (nm)
+        Central wavelength (nm)
     v_grid : np.ndarray, optional
-        速度网格 (km/s)
+        Velocity grid (km/s)
     line_model : optional
-        谱线模型对象（必需参数）
+        Line model object (required)
     B_los : np.ndarray, optional
-        视向磁场 (Gauss)
+        Line-of-sight magnetic field (Gauss)
     B_perp : np.ndarray, optional
-        垂直磁场强度 (Gauss)
+        Perpendicular magnetic field strength (Gauss)
     chi : np.ndarray, optional
-        磁场方向角 (rad)
+        Magnetic field direction angle (rad)
     amp : np.ndarray, optional
-        谱线振幅分布（响应权重, >0），直接来自几何
+        Spectral line amplitude distribution (response weight, >0), directly from geometry
     verbose : int, default=1
-        详细程度
+        Verbosity level
     **grid_kwargs
-        传递给网格构建的关键字参数
+        Keyword arguments passed to grid building
     
     Returns
     -------
     PhysicalModel
-        完整的物理模型对象
+        Complete physical model object
     
     Examples
     --------
@@ -597,13 +644,13 @@ def create_physical_model(par: readParamsTomog,
     >>> from core.local_linemodel_basic import GaussianZeemanWeakLineModel
     >>> from core.physical_model import create_physical_model
     >>> 
-    >>> # 读取参数
+    >>> # Read parameters
     >>> par = readParamsTomog('input/params_tomog.txt')
     >>> 
-    >>> # 创建谱线模型
+    >>> # Create line model
     >>> line_model = GaussianZeemanWeakLineModel()
     >>> 
-    >>> # 创建物理模型
+    >>> # Create physical model
     >>> phys_model = create_physical_model(
     ...     par,
     ...     wl0_nm=656.3,
@@ -611,7 +658,7 @@ def create_physical_model(par: readParamsTomog,
     ...     verbose=1
     ... )
     >>> 
-    >>> # 检查模型
+    >>> # Check model
     >>> print(phys_model.get_summary())
     >>> phys_model.validate()
     """
@@ -673,22 +720,22 @@ def create_physical_model(par: readParamsTomog,
             # 2. Extract physical quantities (if not explicitly provided)
             if B_los is None and hasattr(geom_loaded, 'B_los'):
                 B_los = geom_loaded.B_los
-                if verbose:
+                if verbose and B_los is not None:
                     print(f"  ✓ Loaded B_los ({len(B_los)} pixels)")
 
             if B_perp is None and hasattr(geom_loaded, 'B_perp'):
                 B_perp = geom_loaded.B_perp
-                if verbose:
+                if verbose and B_perp is not None:
                     print(f"  ✓ Loaded B_perp ({len(B_perp)} pixels)")
 
             if chi is None and hasattr(geom_loaded, 'chi'):
                 chi = geom_loaded.chi
-                if verbose:
+                if verbose and chi is not None:
                     print(f"  ✓ Loaded chi ({len(chi)} pixels)")
 
             if amp is None and hasattr(geom_loaded, 'amp'):
                 amp = geom_loaded.amp
-                if verbose:
+                if verbose and amp is not None:
                     print(f"  ✓ Loaded amp ({len(amp)} pixels)")
 
         except Exception as e:

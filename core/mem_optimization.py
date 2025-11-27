@@ -196,10 +196,12 @@ class ResponseMatrixCache:
     def __repr__(self) -> str:
         """Cache info string representation"""
         stats = self.get_stats()
-        return (f"ResponseMatrixCache("
-                f"size={stats.size}/{stats.max_size}, "
-                f"hit_rate={stats.hit_rate:.1%}, "
-                f"memory={stats.memory_usage/1e6:.1f}MB)")
+        return (
+            f"ResponseMatrixCache("
+            f"size={stats.size}/{stats.max_size}, "
+            f"hit_rate={stats.hit_rate:.1%}, "
+            f"memory={stats.memory_usage / 1e6 if stats.memory_usage else 0:.1f}MB)"
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -345,23 +347,23 @@ class DataPipeline:
                     self._Data[idx] = specI[wl_idx]
                     self._sig2[idx] = specI_sig[wl_idx]**2
 
-                if self.fit_V:
+                if self.fit_V and specV is not None and specV_sig is not None:
                     idx = self.index_map[(obs_idx, wl_idx, 'V')]
                     self._Data[idx] = specV[wl_idx]
                     self._sig2[idx] = specV_sig[wl_idx]**2
 
-                if self.fit_Q:
+                if self.fit_Q and specQ is not None:
                     idx = self.index_map[(obs_idx, wl_idx, 'Q')]
                     self._Data[idx] = specQ[wl_idx]
                     self._sig2[idx] = specI_sig[wl_idx]**2  # Q/U use I noise
 
-                if self.fit_U:
+                if self.fit_U and specU is not None:
                     idx = self.index_map[(obs_idx, wl_idx, 'U')]
                     self._Data[idx] = specU[wl_idx]
                     self._sig2[idx] = specI_sig[wl_idx]**2
 
         if self.verbose >= 1:
-            print(f"[DataPipeline] ✓ Data packed successfully")
+            print("[DataPipeline] ✓ Data packed successfully")
 
     @property
     def Data(self) -> np.ndarray:

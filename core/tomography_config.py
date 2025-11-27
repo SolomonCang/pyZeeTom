@@ -283,10 +283,11 @@ class ForwardModelConfig:
 
         if abs(pOmega + 1.0) > 1e-6:
             # General case: infer r_out from Vmax
-            r_out_stellar = (Vmax /
-                             velEq)**(1.0 /
-                                      (pOmega + 1.0)) if Vmax > 0 else float(
-                                          getattr(par, 'r_out', 5.0))
+            # FIX: Use vsini (projected) instead of velEq (intrinsic) to avoid inclination dependency
+            vsini_val = float(getattr(par, 'vsini', 10.0))
+            r_out_stellar = (Vmax / vsini_val)**(
+                1.0 / (pOmega + 1.0)) if Vmax > 0 else float(
+                    getattr(par, 'r_out', 5.0))
             r_out_grid = radius * r_out_stellar
         else:
             # Special case: pOmega = -1 (constant angular momentum)
