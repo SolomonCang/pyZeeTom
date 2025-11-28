@@ -46,7 +46,7 @@ class readParamsTomog:
             [])  # New: polarization channel for each observation (I/V/Q/U)
         self.numObs = 0
         # New defaults for tomography workflow
-        self.lineParamFile = 'lines.txt'  # path to line model parameters
+        self.lineParamFile = 'input/lines.txt'  # path to line model parameters
         self.obsFileType = 'auto'  # observation format hint for readObs
         self.enable_stellar_occultation = 0  # Default disable stellar occultation
         i = 0

@@ -20,7 +20,7 @@ from scipy.interpolate import griddata, Rbf
 PARAM_CONFIG = {
     # Input file path
     # 'model_path': 'output/spot_forward/spot_model_phase_0p00.tomog',
-    'model_path': 'output/ap149_test/mem_inversion_model.tomog',
+    'model_path': 'output/spot_truth.tomog',
     # 'model_path': 'output/spot_forward/truth_model.tomog',
     # Output file path (Set to None to show window, set to 'filename.png' to save)
     'out_fig': None,
@@ -70,7 +70,6 @@ except ImportError:
 
     # Define dummy reader for demonstration (if core module is missing)
     class VelspaceDiskIntegrator:
-
         @staticmethod
         def read_geomodel(path):
             raise NotImplementedError("Core module missing.")

@@ -2,7 +2,7 @@
 # pyZeeTom Copilot Quick Guide & Project Architecture
 
 **Last Updated**: 2025-11-15
-**Version**: v 0.3.0
+**Version**: v 0.3.2
 
 ## Quick Navigation
 

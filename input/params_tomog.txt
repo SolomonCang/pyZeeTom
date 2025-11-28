@@ -1,82 +1,27 @@
-# Example tomography parameter file (params_example.tomog)
-# Lines are positional. Blank lines and lines starting with # are ignored.
-# Units: angles in degrees, velocities km/s, dates in HJD (Heliocentric Julian Date).
-
-#0 inclination  vsini  period  pOmega
-# period: rotation period at reference radius r0 (in days)
-# pOmega: power-law index for differential rotation, Ω(r) = Ω_ref × (r/r0)^pOmega
-#   pOmega = 0.0  : rigid rotation
-#   pOmega = -0.5 : Keplerian (solar-type for disk)
-#   pOmega = -1.0 : constant angular momentum
-60.0  25.0  1.0  -0.05
-
-#1 mass  radius  [Vmax]  [r_out]  [enable_occultation]
-# Two modes for grid construction:
-#   Mode 1: Set Vmax > 0 (e.g., 300 km/s) → grid uses Vmax directly, ignores radius/r_out
-#   Mode 2: Set Vmax = 0 and r_out > 0 → grid computed from radius, r_out, vsini, inclination
-# radius: stellar radius (R_sun), also used as reference radius r0 for differential rotation
-# r_out: outer disk radius (in units of stellar radius), used if Vmax=0
-# enable_occultation: 0=off, 1=on (compute stellar occultation mask for equatorial disk)
-0.5  0.5  0.0  2.0  1
-
-#2 nRingsStellarGrid
-60
-
-#3 targetForm  targetValue  numIterations   (C=chi^2 target, E=entropy target)
-C  1.0  0
-
-#4 test_aim (convergence threshold for Test statistic)
+# Forward tomography parameter file
+60.0 40.0 1.0 -0.05
+1.0 0.8 0.0 3.0 0
+10
+C 1.5 5
 1e-3
-
-#5 lineAmpConst  k_QU  enableV  enableQU
-1  1.0  1  1
-
-#6 initTomogFile  initModelPath
-# Unified model initialization parameter (new format, replaces legacy #6 and #9)
-# initTomogFile: 0=disabled, 1=enabled (read model from .tomog file)
-# initModelPath: path to .tomog model file (e.g., output/geomodel_phase0.tomog)
-# When enabled:
-#   - Model parameters override input params (inclination, pOmega, period, etc.)
-#   - If parameter conflicts exist, params_tomog_int.txt is generated in output/
-#   - Magnetic field (B_los, B_perp, chi) and brightness from .tomog are loaded
-# Note: Legacy initMagFromFile/initBrightFromFile (old #6/#9 lines) are deprecated
-1  output/spot_forward/spot_model_phase_0p00.tomog
-
-#7 fitBri fitMag fitBlos fitBperp fitChi
-# Control fitting switches (0=off, 1=on)
-1 1 1 1 1
-
-#8 spectralResolution  lineParamFile
-# spectralResolution: spectrograph resolution (e.g., 65000), will compute FWHM = c/R (km/s)
-# lineParamFile: path to line parameters file (format: wl0 sigWl g)
-65000  input/lines.txt
-
-#9 velStart  velEnd  obsFileType  specType
-# obsFileType: observation file format hint (lsd_i, lsd_pol, spec_i, spec_pol, auto)
-# specType: data domain (auto=auto-detect, spec=wavelength domain, lsd=velocity domain)
-#   When specType=auto, SpecIO will automatically determine format and domain
--300.0  300.0  spec_pol  specType=auto-detect
-
-#10 jDateRef  (HJD0, reference epoch for phase calculation: phase = (HJD - HJD0) / period)
-0.5
-
-#11+ observation entries: filename  HJD  velR  [polchannel]
-# polchannel: I/V/Q/U (optional, default=V)
-#   I: Intensity only (output spec_i or lsd_i format, 3 columns)
-#   V/Q/U: Polarization (output spec_pol or lsd_pol format with specified Stokes component)
-# Example for 5 phases over 1 rotation period (0-1 day):
-input/inSpec/phase_0014_HJD2450000p980_VRp0p00_V.spec 2450000.00000 0.0 V
-input/inSpec/phase_0013_HJD2450000p920_VRp0p00_V.spec 2450000.05000 0.0 V
-input/inSpec/phase_0011_HJD2450000p800_VRp0p00_V.spec 2450000.12000 0.0 V
-input/inSpec/phase_0012_HJD2450000p880_VRp0p00_V.spec 2450000.18000 0.0 V
-input/inSpec/phase_0009_HJD2450000p650_VRp0p00_V.spec 2450000.25000 0.0 V
-input/inSpec/phase_0010_HJD2450000p720_VRp0p00_V.spec 2450000.33000 0.0 V
-input/inSpec/phase_0008_HJD2450000p550_VRp0p00_V.spec 2450000.41000 0.0 V
-input/inSpec/phase_0007_HJD2450000p480_VRp0p00_V.spec 2450000.48000 0.0 V
-input/inSpec/phase_0005_HJD2450000p330_VRp0p00_V.spec 2450000.55000 0.0 V
-input/inSpec/phase_0006_HJD2450000p410_VRp0p00_V.spec 2450000.65000 0.0 V
-input/inSpec/phase_0003_HJD2450000p180_VRp0p00_V.spec 2450000.72000 0.0 V
-input/inSpec/phase_0004_HJD2450000p250_VRp0p00_V.spec 2450000.80000 0.0 V
-input/inSpec/phase_0002_HJD2450000p120_VRp0p00_V.spec 2450000.88000 0.0 V
-input/inSpec/phase_0001_HJD2450000p050_VRp0p00_V.spec 2450000.92000 0.0 V
-input/inSpec/phase_0000_HJD2450000p000_VRp0p00_V.spec 2450000.98000 0.0 V
+1 1.0 0 0
+1 /Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/output/spot_truth.tomog
+1 1 1 1 0
+65000 /Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/lines.txt
+-400 400 lsd_pol polOut=V
+2450000.0
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.000.lsd 2450000.00000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.050.lsd 2450000.05000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.120.lsd 2450000.12000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.180.lsd 2450000.18000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.250.lsd 2450000.25000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.330.lsd 2450000.33000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.410.lsd 2450000.41000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.480.lsd 2450000.48000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.550.lsd 2450000.55000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.650.lsd 2450000.65000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.720.lsd 2450000.72000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.800.lsd 2450000.80000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.880.lsd 2450000.88000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.920.lsd 2450000.92000 0.0 V
+/Users/tianqi/Documents/Codes_collection/ZDI_and/pyZeeTom/input/spot_forward_obs/obs_phase_0.980.lsd 2450000.98000 0.0 V

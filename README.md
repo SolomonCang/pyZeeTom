@@ -2,6 +2,10 @@
 
 **pyZeeTom** is a tomography tool designed for the inversion and forward modeling of 4 Stokes parameters (I, Q, U, V) polarization spectra.
 
+The basic idea of this code comes from the tomogrpaphy method described in Donati et al. (2001), using the Skilling & Bryan (1984) Maximum Entropy Method (MEM) algorithm as the optimization engine. The Python version of MEE method is developed based on Folsom et al. (2018) implementation in the ZDI code `ZDIpy` [https://github.com/folsomcp/ZDIpy].
+
+In this project, an optimized MEM python module is developed to handle the inversion process efficiently, it could be easily extended to other inversion problems in astrophysics.
+
 ## Project Overview
 
 This project addresses the following physical scenarios:
