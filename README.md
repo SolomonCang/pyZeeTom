@@ -26,13 +26,7 @@ This project addresses the following physical scenarios:
 
 ## Quick Start
 
-### Installation
-
-```bash
-pip install -e .
-# Or install with development dependencies
-pip install -e .[dev]
-```
+More examples and tutorials can be found in the `examples/` directory.
 
 ### Running Forward Synthesis
 
