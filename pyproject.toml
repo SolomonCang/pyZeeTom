@@ -27,3 +27,6 @@ pyzeetom = "pyzeetom.tomography:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pyzeetom*", "core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

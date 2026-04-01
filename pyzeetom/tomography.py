@@ -68,7 +68,10 @@ def forward_tomography(
     # 1. Load parameters and observations
     if verbose:
         print(f"[forward_tomography] Reading parameters: {param_file}")
-    par = mf.readParamsTomog(param_file)
+    if str(param_file).lower().endswith('.json'):
+        par = mf.readParamsTomog.from_json(param_file, verbose=verbose)
+    else:
+        par = mf.readParamsTomog(param_file)
 
     if verbose:
         print(
@@ -215,7 +218,10 @@ def inversion_tomography(
     # 1. Load parameters and observations
     if verbose >= 1:
         print(f"[inversion_tomography] Reading parameters: {param_file}")
-    par = mf.readParamsTomog(param_file)
+    if str(param_file).lower().endswith('.json'):
+        par = mf.readParamsTomog.from_json(param_file, verbose=(verbose >= 1))
+    else:
+        par = mf.readParamsTomog(param_file)
 
     # 1.1 Apply overrides
     if config_overrides:

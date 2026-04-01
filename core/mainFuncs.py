@@ -1,3 +1,4 @@
+import json
 import numpy as np
 from pathlib import Path
 import core.SpecIO as SpecIO
@@ -647,6 +648,291 @@ class readParamsTomog:
             import traceback
             traceback.print_exc()
             return False
+
+    @classmethod
+    def from_json(cls, json_file, verbose=1):
+        """Create a readParamsTomog instance from a JSON config file.
+
+        The JSON file uses named, grouped keys instead of the positional text
+        format.  All groups are optional where defaults exist; the
+        ``observations`` group (with ``files`` list) is required.
+
+        Parameters
+        ----------
+        json_file : str or Path
+            Path to the ``config.json`` file.
+        verbose : int
+            Verbosity level (0=silent, 1=normal).
+
+        Returns
+        -------
+        readParamsTomog
+            Fully initialised parameter object, identical in interface to the
+            object returned by the positional-text constructor.
+
+        JSON schema (all keys optional unless marked *required*)::
+
+            {
+              "star": {
+                "inclination": 60.0,   // degrees
+                "vsini":       40.0,   // km/s
+                "period":       1.0,   // days
+                "pOmega":      -0.05,  // differential-rotation power index
+                "mass":         1.0,   // solar masses
+                "radius":       0.8    // solar radii (= r0 reference radius)
+              },
+              "grid": {
+                "nRings":             10,
+                "Vmax":              0.0,   // km/s  (0 => derived from r_out)
+                "r_out":             3.0,   // stellar radii
+                "enable_occultation": 0
+              },
+              "inversion": {
+                "targetForm":     "C",    // "C" (chi^2) or "E" (entropy)
+                "targetValue":    1.5,
+                "numIterations":  5,
+                "test_aim":       1e-3
+              },
+              "line_model": {
+                "lineAmpConst": 1.0,
+                "k_QU":         1.0,
+                "enableV":      1,
+                "enableQU":     1
+              },
+              "initial_model": {
+                "initTomogFile": 0,        // 1 = load from file
+                "initModelPath": ""
+              },
+              "fit_flags": {
+                "fitBri":   1,
+                "fitMag":   1,
+                "fitBlos":  1,
+                "fitBperp": 1,
+                "fitChi":   0
+              },
+              "spectral": {
+                "spectralResolution": 65000,
+                "lineParamFile":      "input/lines.txt",
+                "velStart":          -400.0,
+                "velEnd":             400.0,
+                "obsFileType":        "lsd_pol",
+                "polOut":             "V",
+                "specType":           "auto"
+              },
+              "observations": {           // *required*
+                "jDateRef": 2450000.0,
+                "files": [               // *required*, one entry per observation
+                  {
+                    "path":       "input/obs/obs_phase_0.000.lsd",
+                    "jdate":      2450000.0,
+                    "vr":         0.0,
+                    "polchannel": "V"    // optional, default "V"
+                  }
+                ]
+              }
+            }
+        """
+        json_path = Path(json_file)
+        if not json_path.exists():
+            raise FileNotFoundError(f"Config JSON not found: {json_file}")
+
+        with open(json_path, 'r') as fh:
+            cfg = json.load(fh)
+
+        # ---- build a dummy text file in memory then parse it ---------------
+        # We construct the same positional format that __init__ already parses,
+        # so that ALL derived-parameter logic (corotation radius, Vmax, phases,
+        # instrumentRes, …) is executed exactly once and consistently.
+
+        star   = cfg.get('star', {})
+        grid   = cfg.get('grid', {})
+        inv    = cfg.get('inversion', {})
+        lm     = cfg.get('line_model', {})
+        im     = cfg.get('initial_model', {})
+        ff     = cfg.get('fit_flags', {})
+        spec   = cfg.get('spectral', {})
+        obs_g  = cfg.get('observations', {})
+
+        inclination = float(star.get('inclination', 60.0))
+        vsini       = float(star.get('vsini', 40.0))
+        period      = float(star.get('period', 1.0))
+        pOmega      = float(star.get('pOmega', 0.0))
+        mass        = float(star.get('mass', 1.0))
+        radius      = float(star.get('radius', 1.0))
+
+        nRings         = int(grid.get('nRings', 10))
+        Vmax           = float(grid.get('Vmax', 0.0))
+        r_out          = float(grid.get('r_out', 0.0))
+        enable_occ     = int(grid.get('enable_occultation', 0))
+
+        targetForm      = str(inv.get('targetForm', 'C'))
+        targetValue     = float(inv.get('targetValue', 1.0))
+        numIterations   = int(inv.get('numIterations', 10))
+        test_aim        = float(inv.get('test_aim', 1e-3))
+
+        lineAmpConst = float(lm.get('lineAmpConst', 1.0))
+        k_QU         = float(lm.get('k_QU', 1.0))
+        enableV      = int(lm.get('enableV', 1))
+        enableQU     = int(lm.get('enableQU', 1))
+
+        initTomogFile = int(im.get('initTomogFile', 0))
+        initModelPath = str(im.get('initModelPath', '')).strip()
+
+        fitBri   = int(ff.get('fitBri', 1))
+        fitMag   = int(ff.get('fitMag', 1))
+        fitBlos  = int(ff.get('fitBlos', 1))
+        fitBperp = int(ff.get('fitBperp', 1))
+        fitChi   = int(ff.get('fitChi', 0))
+
+        spectralRes  = float(spec.get('spectralResolution', 65000))
+        lineParamFile = str(spec.get('lineParamFile', 'input/lines.txt'))
+        velStart     = float(spec.get('velStart', -400.0))
+        velEnd       = float(spec.get('velEnd',   400.0))
+        obsFileType  = str(spec.get('obsFileType', 'lsd_pol'))
+        polOut       = str(spec.get('polOut', 'V'))
+        specType     = str(spec.get('specType', 'auto'))
+
+        jDateRef = float(obs_g.get('jDateRef', 0.0))
+        obs_files = obs_g.get('files', [])
+        if not obs_files:
+            raise ValueError(
+                "config.json 'observations.files' list is empty or missing")
+
+        # Build positional text lines
+        lines = [
+            f"{inclination} {vsini} {period} {pOmega}",
+            f"{mass} {radius} {Vmax} {r_out} {enable_occ}",
+            f"{nRings}",
+            f"{targetForm} {targetValue} {numIterations}",
+            f"{test_aim}",
+            f"{lineAmpConst} {k_QU} {enableV} {enableQU}",
+            f"{initTomogFile}" + (f" {initModelPath}" if initModelPath else ""),
+            f"{fitBri} {fitMag} {fitBlos} {fitBperp} {fitChi}",
+            f"{spectralRes:.0f} {lineParamFile}",
+            f"{velStart} {velEnd} {obsFileType} polOut={polOut} specType={specType}",
+            f"{jDateRef}",
+        ]
+        for entry in obs_files:
+            path    = entry.get('path', '')
+            jdate   = float(entry.get('jdate', jDateRef))
+            vr      = float(entry.get('vr', 0.0))
+            polchan = str(entry.get('polchannel', 'V')).upper()
+            lines.append(f"{path} {jdate} {vr} {polchan}")
+
+        # Write to a temporary in-memory file via a temp path so the existing
+        # __init__ parser can be reused without duplication.
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
+                                        delete=False) as tmp:
+            tmp.write('\n'.join(lines) + '\n')
+            tmp_path = tmp.name
+
+        try:
+            obj = cls(tmp_path, verbose=verbose)
+        finally:
+            os.unlink(tmp_path)
+
+        if verbose:
+            print(f"[readParamsTomog] Loaded config from JSON: {json_file}")
+        return obj
+
+    def to_json(self, json_file=None, verbose=1):
+        """Serialise this parameter object to a ``config.json`` file.
+
+        The produced file can be read back with :meth:`from_json` and is
+        equivalent to the original positional text file.
+
+        Parameters
+        ----------
+        json_file : str or Path or None
+            Destination path.  If *None*, only the dictionary is returned and
+            nothing is written to disk.
+        verbose : int
+            Verbosity level.
+
+        Returns
+        -------
+        dict
+            The configuration dictionary that was (or would be) written.
+        """
+        obs_files = []
+        for i in range(self.numObs):
+            polchan = (self.polChannels[i]
+                       if i < len(self.polChannels) else 'V')
+            obs_files.append({
+                'path':       str(self.fnames[i]),
+                'jdate':      float(self.jDates[i]),
+                'vr':         float(self.velRs[i]),
+                'polchannel': str(polchan),
+            })
+
+        cfg = {
+            'star': {
+                'inclination': float(self.inclination),
+                'vsini':       float(self.vsini),
+                'period':      float(self.period),
+                'pOmega':      float(self.pOmega),
+                'mass':        float(self.mass),
+                'radius':      float(self.radius),
+            },
+            'grid': {
+                'nRings':             int(self.nRingsStellarGrid),
+                'Vmax':               float(self.Vmax),
+                'r_out':              float(getattr(self, 'r_out', 0.0)),
+                'enable_occultation': int(
+                    getattr(self, 'enable_stellar_occultation', 0)),
+            },
+            'inversion': {
+                'targetForm':    str(self.targetForm),
+                'targetValue':   float(self.targetValue),
+                'numIterations': int(self.numIterations),
+                'test_aim':      float(self.test_aim),
+            },
+            'line_model': {
+                'lineAmpConst': float(self.lineAmpConst),
+                'k_QU':         float(self.lineKQU),
+                'enableV':      int(self.lineEnableV),
+                'enableQU':     int(self.lineEnableQU),
+            },
+            'initial_model': {
+                'initTomogFile': int(getattr(self, 'initTomogFile', 0)),
+                'initModelPath': str(getattr(self, 'initModelPath', '') or ''),
+            },
+            'fit_flags': {
+                'fitBri':   int(self.fitBri),
+                'fitMag':   int(self.fitMag),
+                'fitBlos':  int(self.fitBlos),
+                'fitBperp': int(self.fitBperp),
+                'fitChi':   int(self.fitChi),
+            },
+            'spectral': {
+                'spectralResolution': float(self.spectralResolution),
+                'lineParamFile':      str(self.lineParamFile),
+                'velStart':           float(self.velStart),
+                'velEnd':             float(self.velEnd),
+                'obsFileType':        str(
+                    getattr(self, 'obsFileType', 'lsd_pol')),
+                'polOut':             str(getattr(self, 'polOut', 'V')),
+                'specType':           str(getattr(self, 'specType', 'auto')),
+            },
+            'observations': {
+                'jDateRef': float(self.jDateRef),
+                'files':    obs_files,
+            },
+        }
+
+        if json_file is not None:
+            out_path = Path(json_file)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, 'w') as fh:
+                json.dump(cfg, fh, indent=2)
+            if verbose:
+                print(
+                    f"[readParamsTomog] Saved config to JSON: {json_file}"
+                )
+
+        return cfg
 
 
 #############################################
