@@ -20,6 +20,9 @@ dev = [
   "pytest>=7.0",
   "matplotlib>=3.6",
 ]
+tools = [
+  "flask>=3.0",
+]
 
 [project.scripts]
 pyzeetom = "pyzeetom.tomography:main"
