@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pyZeeTom — Parameter Editor</title>
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        crossorigin="anonymous" />
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+        crossorigin="anonymous" />
+  <style>
+    body { background: #f0f2f5; }
+    .sidebar { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
+    .log-console {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: "Courier New", monospace;
+      font-size: 0.82rem;
+      height: 340px;
+      overflow-y: auto;
+      padding: 0.75rem 1rem;
+      border-radius: 0.375rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .log-line-error   { color: #f48771; }
+    .log-line-warning { color: #dcdcaa; }
+    .log-line-info    { color: #9cdcfe; }
+    .log-line-ok      { color: #4ec9b0; }
+    .section-card { border-left: 4px solid #0d6efd; }
+    .obs-row:nth-child(odd)  { background: rgba(255,255,255,.6); }
+    .obs-row:nth-child(even) { background: rgba(240,242,245,.9); }
+    .badge-running { animation: blink 1s step-start infinite; }
+    @keyframes blink { 50% { opacity: .3; } }
+    .nav-link.active-section { font-weight: 600; color: #0d6efd !important; }
+    #status-badge { min-width: 6rem; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+  <div class="container-fluid">
+    <span class="navbar-brand fw-bold">
+      <i class="bi bi-stars me-1"></i>pyZeeTom Web UI
+    </span>
+    <span class="navbar-text text-white-50 small">
+      Interactive Parameter Editor &amp; Workflow Launcher
+    </span>
+  </div>
+</nav>
+
+<div class="container-fluid py-3">
+  <div class="row g-3">
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- LEFT: nav + file panel                                              -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="col-12 col-xl-2">
+      <div class="sidebar">
+        <!-- File loader card -->
+        <div class="card shadow-sm mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-folder2-open me-1"></i>Config File
+          </div>
+          <div class="card-body p-2">
+            <div class="mb-2">
+              <label class="form-label small mb-1">Parameter file (.txt / .json)</label>
+              <input id="file-path" type="text" class="form-control form-control-sm"
+                     placeholder="input/params_tomog.txt" />
+            </div>
+            <button id="btn-load" class="btn btn-sm btn-outline-primary w-100 mb-2"
+                    onclick="loadParams()">
+              <i class="bi bi-upload me-1"></i>Load
+            </button>
+            <div class="mb-2">
+              <label class="form-label small mb-1">Save to file</label>
+              <input id="save-path" type="text" class="form-control form-control-sm"
+                     placeholder="output/params_tomog_edit.txt" />
+            </div>
+            <button class="btn btn-sm btn-outline-secondary w-100"
+                    onclick="saveParams()">
+              <i class="bi bi-save me-1"></i>Save
+            </button>
+          </div>
+        </div>
+
+        <!-- Section nav -->
+        <div class="card shadow-sm mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-list-ul me-1"></i>Sections
+          </div>
+          <div class="card-body p-2">
+            <nav class="nav flex-column nav-pills" id="section-nav">
+              <a class="nav-link py-1 px-2 small" href="#sec-star">Stellar</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-disk">Disk Model</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-grid">Grid</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-inv">Inversion</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-lm">Line Model</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-fit">Fit Flags</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-spec">Spectral</a>
+              <a class="nav-link py-1 px-2 small" href="#sec-obs">Observations</a>
+            </nav>
+          </div>
+        </div>
+
+        <!-- Run panel -->
+        <div class="card shadow-sm">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-play-circle me-1"></i>Run Workflow
+          </div>
+          <div class="card-body p-2">
+            <div class="mb-2">
+              <label class="form-label small mb-1">Output directory</label>
+              <input id="output-dir" type="text" class="form-control form-control-sm"
+                     value="./output" />
+            </div>
+            <div class="d-grid gap-2">
+              <button id="btn-forward" class="btn btn-success btn-sm"
+                      onclick="runWorkflow('forward')">
+                <i class="bi bi-arrow-right-circle me-1"></i>Run Forward
+              </button>
+              <button id="btn-inversion" class="btn btn-warning btn-sm"
+                      onclick="runWorkflow('inversion')">
+                <i class="bi bi-arrow-repeat me-1"></i>Run Inversion
+              </button>
+              <button id="btn-stop" class="btn btn-danger btn-sm d-none"
+                      onclick="stopJob()">
+                <i class="bi bi-stop-circle me-1"></i>Stop
+              </button>
+            </div>
+            <div class="mt-2 text-center">
+              <span id="status-badge" class="badge bg-secondary">Idle</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /col left -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- CENTRE: parameter form                                              -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="col-12 col-xl-7">
+      <div id="alert-area"></div>
+
+      <form id="param-form" novalidate>
+
+        <!-- ── Stellar ── -->
+        <div id="sec-star" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-star me-1 text-warning"></i>Stellar Parameters
+          </div>
+          <div class="card-body row g-3 py-3">
+            <div class="col-sm-3">
+              <label class="form-label small">Inclination (°)</label>
+              <input name="inclination" type="number" step="any"
+                     class="form-control form-control-sm" value="60.0" />
+              <div class="form-text">Angle between LOS and rotation axis</div>
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">v sin i (km/s)</label>
+              <input name="vsini" type="number" step="any"
+                     class="form-control form-control-sm" value="40.0" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Period (days)</label>
+              <input name="period" type="number" step="any"
+                     class="form-control form-control-sm" value="1.0" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">pΩ (diff. rot. index)</label>
+              <input name="pOmega" type="number" step="any"
+                     class="form-control form-control-sm" value="0.0" />
+              <div class="form-text">Ω(r) ∝ r<sup>pΩ</sup></div>
+            </div>
+          </div>
+        </div><!-- /stellar -->
+
+        <!-- ── Disk Model ── -->
+        <div id="sec-disk" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-circle me-1 text-info"></i>Disk Model
+          </div>
+          <div class="card-body row g-3 py-3">
+            <div class="col-sm-2">
+              <label class="form-label small">Mass (M☉)</label>
+              <input name="mass" type="number" step="any"
+                     class="form-control form-control-sm" value="1.0" />
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">Radius (R☉)</label>
+              <input name="radius" type="number" step="any"
+                     class="form-control form-control-sm" value="1.0" />
+              <div class="form-text">Also r₀ reference radius</div>
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">V<sub>max</sub> (km/s)</label>
+              <input name="Vmax" type="number" step="any"
+                     class="form-control form-control-sm" value="0.0" />
+              <div class="form-text">0 = derived from r_out &amp; vsini</div>
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">r_out (R*)</label>
+              <input name="r_out" type="number" step="any"
+                     class="form-control form-control-sm" value="0.0" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Stellar occultation</label>
+              <select name="enable_stellar_occultation"
+                      class="form-select form-select-sm">
+                <option value="0">Disabled (0)</option>
+                <option value="1">Enabled (1)</option>
+              </select>
+            </div>
+          </div>
+        </div><!-- /disk -->
+
+        <!-- ── Grid ── -->
+        <div id="sec-grid" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-grid me-1 text-secondary"></i>Grid
+          </div>
+          <div class="card-body row g-3 py-3">
+            <div class="col-sm-4">
+              <label class="form-label small">Number of annular rings</label>
+              <input name="nRingsStellarGrid" type="number" step="1" min="1"
+                     class="form-control form-control-sm" value="10" />
+            </div>
+          </div>
+        </div><!-- /grid -->
+
+        <!-- ── Inversion ── -->
+        <div id="sec-inv" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-arrow-repeat me-1 text-warning"></i>Inversion Control (MEM)
+          </div>
+          <div class="card-body row g-3 py-3">
+            <div class="col-sm-3">
+              <label class="form-label small">Target form</label>
+              <select name="targetForm" class="form-select form-select-sm">
+                <option value="C">C — χ² target</option>
+                <option value="E">E — Entropy target</option>
+              </select>
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Target value</label>
+              <input name="targetValue" type="number" step="any"
+                     class="form-control form-control-sm" value="1.5" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Max iterations</label>
+              <input name="numIterations" type="number" step="1" min="1"
+                     class="form-control form-control-sm" value="5" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Convergence threshold</label>
+              <input name="test_aim" type="number" step="any"
+                     class="form-control form-control-sm" value="0.001" />
+            </div>
+          </div>
+        </div><!-- /inversion -->
+
+        <!-- ── Line Model ── -->
+        <div id="sec-lm" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-activity me-1 text-success"></i>Line Model
+          </div>
+          <div class="card-body row g-3 py-3">
+            <div class="col-sm-3">
+              <label class="form-label small">Amplitude constant</label>
+              <input name="lineAmpConst" type="number" step="any"
+                     class="form-control form-control-sm" value="1.0" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">k<sub>QU</sub> scaling</label>
+              <input name="lineKQU" type="number" step="any"
+                     class="form-control form-control-sm" value="1.0" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Enable Stokes V</label>
+              <select name="lineEnableV" class="form-select form-select-sm">
+                <option value="1">Yes (1)</option>
+                <option value="0">No (0)</option>
+              </select>
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Enable Stokes Q,U</label>
+              <select name="lineEnableQU" class="form-select form-select-sm">
+                <option value="1">Yes (1)</option>
+                <option value="0">No (0)</option>
+              </select>
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label small">Init from .tomog file</label>
+              <select name="initTomogFile" class="form-select form-select-sm">
+                <option value="0">No (0)</option>
+                <option value="1">Yes (1)</option>
+              </select>
+            </div>
+            <div class="col-sm-8">
+              <label class="form-label small">Initial model path (.tomog)</label>
+              <input name="initModelPath" type="text"
+                     class="form-control form-control-sm"
+                     placeholder="output/spot_truth.tomog" />
+            </div>
+          </div>
+        </div><!-- /line model -->
+
+        <!-- ── Fit Flags ── -->
+        <div id="sec-fit" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-toggles me-1 text-danger"></i>Fit Flags
+          </div>
+          <div class="card-body row g-2 py-3">
+            <div class="col-auto">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="ff-bri"
+                       name="fitBri" value="1" checked />
+                <label class="form-check-label small" for="ff-bri">Brightness</label>
+              </div>
+            </div>
+            <div class="col-auto">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="ff-mag"
+                       name="fitMag" value="1" />
+                <label class="form-check-label small" for="ff-mag">Magnetic (combined)</label>
+              </div>
+            </div>
+            <div class="col-auto">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="ff-blos"
+                       name="fitBlos" value="1" />
+                <label class="form-check-label small" for="ff-blos">B<sub>los</sub></label>
+              </div>
+            </div>
+            <div class="col-auto">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="ff-bperp"
+                       name="fitBperp" value="1" />
+                <label class="form-check-label small" for="ff-bperp">B<sub>⊥</sub></label>
+              </div>
+            </div>
+            <div class="col-auto">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="ff-chi"
+                       name="fitChi" value="1" />
+                <label class="form-check-label small" for="ff-chi">χ (azimuth)</label>
+              </div>
+            </div>
+          </div>
+        </div><!-- /fit flags -->
+
+        <!-- ── Spectral ── -->
+        <div id="sec-spec" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2">
+            <i class="bi bi-graph-up me-1 text-primary"></i>Spectral Settings
+          </div>
+          <div class="card-body row g-3 py-3">
+            <div class="col-sm-3">
+              <label class="form-label small">Spectral resolution R</label>
+              <input name="spectralResolution" type="number" step="any"
+                     class="form-control form-control-sm" value="65000" />
+            </div>
+            <div class="col-sm-5">
+              <label class="form-label small">Line parameter file</label>
+              <input name="lineParamFile" type="text"
+                     class="form-control form-control-sm"
+                     value="input/lines.txt" />
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">v start (km/s)</label>
+              <input name="velStart" type="number" step="any"
+                     class="form-control form-control-sm" value="-400" />
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">v end (km/s)</label>
+              <input name="velEnd" type="number" step="any"
+                     class="form-control form-control-sm" value="400" />
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Obs. file type</label>
+              <select name="obsFileType" class="form-select form-select-sm">
+                <option value="auto">auto</option>
+                <option value="lsd_pol">lsd_pol</option>
+                <option value="lsd_i">lsd_i</option>
+                <option value="spec_i">spec_i</option>
+                <option value="spec_pol">spec_pol</option>
+              </select>
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Output polarisation</label>
+              <select name="polOut" class="form-select form-select-sm">
+                <option value="V">V</option>
+                <option value="Q">Q</option>
+                <option value="U">U</option>
+              </select>
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Spectrum type</label>
+              <select name="specType" class="form-select form-select-sm">
+                <option value="auto">auto</option>
+                <option value="spec">spec</option>
+                <option value="lsd">lsd</option>
+              </select>
+            </div>
+          </div>
+        </div><!-- /spectral -->
+
+        <!-- ── Observations ── -->
+        <div id="sec-obs" class="card shadow-sm section-card mb-3">
+          <div class="card-header bg-white fw-semibold py-2 d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-table me-1 text-secondary"></i>Observations</span>
+            <button type="button" class="btn btn-sm btn-outline-primary py-0"
+                    onclick="addObsRow()">
+              <i class="bi bi-plus-lg"></i> Add
+            </button>
+          </div>
+          <div class="card-body p-2">
+            <div class="mb-2 row g-2">
+              <div class="col-sm-4">
+                <label class="form-label small">Reference epoch (HJD)</label>
+                <input name="jDateRef" type="number" step="any"
+                       class="form-control form-control-sm" value="2450000.0" />
+              </div>
+            </div>
+            <!-- header row -->
+            <div class="row g-1 px-2 mb-1 text-muted small fw-semibold d-none d-md-flex">
+              <div class="col-md-5">File path</div>
+              <div class="col-md-3">HJD</div>
+              <div class="col-md-2">v<sub>r</sub> (km/s)</div>
+              <div class="col-md-1">Pol</div>
+              <div class="col-md-1"></div>
+            </div>
+            <div id="obs-list"></div>
+          </div>
+        </div><!-- /observations -->
+
+      </form><!-- /param-form -->
+    </div><!-- /col centre -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- RIGHT: log console                                                  -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="col-12 col-xl-3">
+      <div class="sticky-top" style="top:1rem">
+        <div class="card shadow-sm">
+          <div class="card-header bg-dark text-white py-2 d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-terminal me-1"></i>Console Output</span>
+            <button class="btn btn-sm btn-outline-light py-0"
+                    onclick="clearLog()">Clear</button>
+          </div>
+          <div id="log-console" class="log-console">
+            <span class="log-line-info">Ready. Load a parameter file or edit parameters manually.</span>
+          </div>
+          <!-- Progress -->
+          <div class="card-footer bg-white py-2">
+            <div class="d-flex align-items-center gap-2">
+              <span class="small text-muted" id="progress-label">–</span>
+              <div class="progress flex-grow-1" style="height:6px">
+                <div id="progress-bar" class="progress-bar progress-bar-striped"
+                     role="progressbar" style="width:0%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /col right -->
+
+  </div><!-- /row -->
+</div><!-- /container -->
+
+<!-- ================================================================ -->
+<!-- JS                                                                  -->
+<!-- ================================================================ -->
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────
+let currentJobId = null;
+let eventSource  = null;
+
+// ── Helpers ────────────────────────────────────────────────────────────
+function log(msg, cls = '') {
+  const console = document.getElementById('log-console');
+  const line = document.createElement('span');
+  if (cls) line.className = cls;
+  line.textContent = msg + '\n';
+  console.appendChild(line);
+  console.scrollTop = console.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('log-console').innerHTML = '';
+}
+
+function setStatus(text, color = 'secondary') {
+  const b = document.getElementById('status-badge');
+  b.textContent = text;
+  b.className = `badge bg-${color}`;
+  if (color === 'success' || color === 'warning') {
+    b.classList.add('badge-running');
+  } else {
+    b.classList.remove('badge-running');
+  }
+}
+
+function showAlert(msg, type = 'danger') {
+  const area = document.getElementById('alert-area');
+  area.innerHTML =
+    `<div class="alert alert-${type} alert-dismissible fade show py-2" role="alert">
+       ${msg}
+       <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+     </div>`;
+}
+
+function setRunning(running) {
+  const fwd  = document.getElementById('btn-forward');
+  const inv  = document.getElementById('btn-inversion');
+  const stop = document.getElementById('btn-stop');
+  fwd.disabled  = running;
+  inv.disabled  = running;
+  if (running) {
+    stop.classList.remove('d-none');
+  } else {
+    stop.classList.add('d-none');
+  }
+}
+
+function setProgress(pct, label = '') {
+  const bar = document.getElementById('progress-bar');
+  bar.style.width = pct + '%';
+  document.getElementById('progress-label').textContent = label || `${pct}%`;
+}
+
+// ── Observation rows ────────────────────────────────────────────────────
+function addObsRow(path = '', jdate = '', vr = '0.0', pol = 'V') {
+  const list = document.getElementById('obs-list');
+  const idx  = list.children.length;
+  const div  = document.createElement('div');
+  div.className = 'obs-row row g-1 align-items-center px-2 py-1 mb-1';
+  div.innerHTML = `
+    <div class="col-md-5">
+      <input name="obs_path_${idx}" type="text" class="form-control form-control-sm"
+             placeholder="/path/to/obs.lsd" value="${path}" />
+    </div>
+    <div class="col-md-3">
+      <input name="obs_jdate_${idx}" type="number" step="any"
+             class="form-control form-control-sm" value="${jdate}" />
+    </div>
+    <div class="col-md-2">
+      <input name="obs_vr_${idx}" type="number" step="any"
+             class="form-control form-control-sm" value="${vr}" />
+    </div>
+    <div class="col-md-1">
+      <select name="obs_pol_${idx}" class="form-select form-select-sm">
+        ${['I','V','Q','U'].map(p =>
+          `<option value="${p}"${p===pol?' selected':''}>${p}</option>`).join('')}
+      </select>
+    </div>
+    <div class="col-md-1 text-end">
+      <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1"
+              onclick="removeObsRow(this)">
+        <i class="bi bi-trash3"></i>
+      </button>
+    </div>`;
+  list.appendChild(div);
+  reindexObs();
+}
+
+function removeObsRow(btn) {
+  btn.closest('.obs-row').remove();
+  reindexObs();
+}
+
+function reindexObs() {
+  const rows = document.querySelectorAll('#obs-list .obs-row');
+  rows.forEach((row, i) => {
+    row.querySelector('[name^="obs_path_"]').name  = `obs_path_${i}`;
+    row.querySelector('[name^="obs_jdate_"]').name = `obs_jdate_${i}`;
+    row.querySelector('[name^="obs_vr_"]').name    = `obs_vr_${i}`;
+    row.querySelector('[name^="obs_pol_"]').name   = `obs_pol_${i}`;
+  });
+}
+
+// ── Collect form data ────────────────────────────────────────────────────
+function collectParams() {
+  const f = document.getElementById('param-form');
+  const fd = new FormData(f);
+
+  // Scalar fields
+  const p = {};
+  [
+    'inclination','vsini','period','pOmega',
+    'mass','radius','Vmax','r_out',
+    'nRingsStellarGrid',
+    'targetForm','targetValue','numIterations','test_aim',
+    'lineAmpConst','lineKQU','initModelPath',
+    'spectralResolution','lineParamFile','velStart','velEnd',
+    'obsFileType','polOut','specType',
+    'jDateRef',
+  ].forEach(k => {
+    const v = fd.get(k);
+    if (v !== null) p[k] = v;
+  });
+
+  // Selects / numbers
+  ['enable_stellar_occultation','lineEnableV','lineEnableQU','initTomogFile'].forEach(k => {
+    const v = fd.get(k);
+    if (v !== null) p[k] = parseInt(v, 10);
+  });
+
+  // Checkboxes (fit flags)
+  p.fitBri   = f.querySelector('[name=fitBri]').checked   ? 1 : 0;
+  p.fitMag   = f.querySelector('[name=fitMag]').checked   ? 1 : 0;
+  p.fitBlos  = f.querySelector('[name=fitBlos]').checked  ? 1 : 0;
+  p.fitBperp = f.querySelector('[name=fitBperp]').checked ? 1 : 0;
+  p.fitChi   = f.querySelector('[name=fitChi]').checked   ? 1 : 0;
+
+  // Observations
+  const nObs = document.querySelectorAll('#obs-list .obs-row').length;
+  const obsFiles = [];
+  for (let i = 0; i < nObs; i++) {
+    obsFiles.push({
+      path:       (fd.get(`obs_path_${i}`) || '').trim(),
+      jdate:      parseFloat(fd.get(`obs_jdate_${i}`) || p.jDateRef),
+      vr:         parseFloat(fd.get(`obs_vr_${i}`) || '0'),
+      polchannel: (fd.get(`obs_pol_${i}`) || 'V'),
+    });
+  }
+  p._observations = obsFiles;
+
+  return p;
+}
+
+// ── Populate form from server response ──────────────────────────────────
+function populateForm(data) {
+  const f = document.getElementById('param-form');
+  const set = (name, val) => {
+    const el = f.querySelector(`[name="${name}"]`);
+    if (!el) return;
+    if (el.tagName === 'SELECT') {
+      el.value = String(val);
+    } else if (el.type === 'checkbox') {
+      el.checked = !!parseInt(val, 10);
+    } else {
+      el.value = val;
+    }
+  };
+
+  const keys = [
+    'inclination','vsini','period','pOmega',
+    'mass','radius','Vmax','r_out','enable_stellar_occultation',
+    'nRingsStellarGrid',
+    'targetForm','targetValue','numIterations','test_aim',
+    'lineAmpConst','lineKQU','lineEnableV','lineEnableQU',
+    'initTomogFile','initModelPath',
+    'spectralResolution','lineParamFile','velStart','velEnd',
+    'obsFileType','polOut','specType','jDateRef',
+  ];
+  keys.forEach(k => { if (data[k] !== undefined) set(k, data[k]); });
+
+  // Fit flags (checkboxes)
+  ['fitBri','fitMag','fitBlos','fitBperp','fitChi'].forEach(k => {
+    const el = f.querySelector(`[name="${k}"]`);
+    if (el) el.checked = !!parseInt(data[k] ?? 0, 10);
+  });
+
+  // Observations
+  const list = document.getElementById('obs-list');
+  list.innerHTML = '';
+  (data._observations || []).forEach(o => {
+    addObsRow(o.path, o.jdate, o.vr, o.polchannel || 'V');
+  });
+}
+
+// ── API calls ────────────────────────────────────────────────────────────
+async function loadParams() {
+  const path = document.getElementById('file-path').value.trim();
+  if (!path) { showAlert('Please enter a file path.'); return; }
+  log(`Loading: ${path}`, 'log-line-info');
+  try {
+    const r = await fetch('/api/params/load', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ file_path: path }),
+    });
+    const d = await r.json();
+    if (!r.ok) { showAlert(d.error || 'Load failed.'); return; }
+    populateForm(d);
+    document.getElementById('save-path').value = path;
+    log('Parameters loaded successfully.', 'log-line-ok');
+  } catch (e) {
+    showAlert('Load error: ' + e.message);
+  }
+}
+
+async function saveParams() {
+  const savePath = document.getElementById('save-path').value.trim();
+  if (!savePath) { showAlert('Please enter a save path.'); return; }
+  const params = collectParams();
+  params._save_path = savePath;
+  log(`Saving to: ${savePath}`, 'log-line-info');
+  try {
+    const r = await fetch('/api/params/save', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(params),
+    });
+    const d = await r.json();
+    if (!r.ok) { showAlert(d.error || 'Save failed.'); return; }
+    log('Parameters saved.', 'log-line-ok');
+    showAlert('Parameters saved to ' + savePath, 'success');
+  } catch (e) {
+    showAlert('Save error: ' + e.message);
+  }
+}
+
+async function runWorkflow(mode) {
+  const params    = collectParams();
+  const outputDir = document.getElementById('output-dir').value.trim() || './output';
+  log(`\n▶ Starting ${mode} workflow…`, 'log-line-info');
+  setRunning(true);
+  setStatus(mode === 'forward' ? 'Running Forward…' : 'Running Inversion…',
+            mode === 'forward' ? 'success' : 'warning');
+  setProgress(0, 'Starting…');
+
+  try {
+    const r = await fetch('/api/run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ mode, params, output_dir: outputDir }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      setRunning(false); setStatus('Error', 'danger');
+      showAlert(d.error || 'Could not start workflow.');
+      return;
+    }
+    currentJobId = d.job_id;
+    openStream(currentJobId);
+  } catch (e) {
+    setRunning(false); setStatus('Error', 'danger');
+    showAlert('Run error: ' + e.message);
+  }
+}
+
+function openStream(jobId) {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`/api/stream/${jobId}`);
+
+  eventSource.addEventListener('log', e => {
+    const msg = e.data;
+    let cls = '';
+    if (/^\[ERROR\]|^Traceback |^  File "|^\w+Error:/i.test(msg)) cls = 'log-line-error';
+    else if (/^\[Warning\]|^Warning:/i.test(msg))                  cls = 'log-line-warning';
+    else if (/^\[.*?\]/.test(msg))                                  cls = 'log-line-info';
+    log(msg, cls);
+  });
+
+  eventSource.addEventListener('progress', e => {
+    try {
+      const d = JSON.parse(e.data);
+      setProgress(d.pct || 0, d.label || '');
+    } catch {}
+  });
+
+  eventSource.addEventListener('done', e => {
+    eventSource.close();
+    eventSource = null;
+    currentJobId = null;
+    setRunning(false);
+    try {
+      const d = JSON.parse(e.data);
+      if (d.success) {
+        setStatus('Done ✓', 'success');
+        setProgress(100, 'Completed');
+        log('✅ Workflow completed successfully.', 'log-line-ok');
+      } else {
+        setStatus('Failed ✗', 'danger');
+        setProgress(0, 'Failed');
+        log('❌ Workflow failed. See log above.', 'log-line-error');
+      }
+    } catch {
+      setStatus('Done', 'secondary');
+    }
+  });
+
+  eventSource.onerror = () => {
+    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      eventSource = null;
+    }
+  };
+}
+
+async function stopJob() {
+  if (!currentJobId) return;
+  log('⏹ Stop requested…', 'log-line-warning');
+  await fetch(`/api/job/${currentJobId}/stop`, { method: 'POST' });
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  // Pre-populate with server defaults
+  fetch('/api/params')
+    .then(r => r.json())
+    .then(d => { if (d && d._observations !== undefined) populateForm(d); })
+    .catch(() => {});
+});
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+        crossorigin="anonymous"></script>
+</body>
+</html>
