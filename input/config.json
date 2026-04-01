@@ -1,0 +1,85 @@
+{
+  "_comment": "pyZeeTom configuration file. Use this file instead of params_tomog.txt for clearer, named parameter input. Pass this file to forward_tomography() or inversion_tomography() as param_file='input/config.json'.",
+
+  "star": {
+    "_comment": "Stellar and disk rotation parameters",
+    "inclination": 60.0,
+    "vsini": 40.0,
+    "period": 1.0,
+    "pOmega": -0.05,
+    "mass": 1.0,
+    "radius": 0.8
+  },
+
+  "grid": {
+    "_comment": "Disk grid parameters. Set Vmax>0 to override automatic derivation from r_out.",
+    "nRings": 10,
+    "Vmax": 0.0,
+    "r_out": 3.0,
+    "enable_occultation": 0
+  },
+
+  "inversion": {
+    "_comment": "MEM inversion control. targetForm: 'C' targets chi^2, 'E' targets entropy.",
+    "targetForm": "C",
+    "targetValue": 1.5,
+    "numIterations": 5,
+    "test_aim": 1e-3
+  },
+
+  "line_model": {
+    "_comment": "Spectral line model parameters.",
+    "lineAmpConst": 1.0,
+    "k_QU": 1.0,
+    "enableV": 0,
+    "enableQU": 0
+  },
+
+  "initial_model": {
+    "_comment": "Load an initial model from a .tomog file. Set initTomogFile=1 to enable.",
+    "initTomogFile": 1,
+    "initModelPath": "output/spot_truth.tomog"
+  },
+
+  "fit_flags": {
+    "_comment": "Switches for which parameters are optimised during inversion (1=on, 0=off).",
+    "fitBri": 1,
+    "fitMag": 1,
+    "fitBlos": 1,
+    "fitBperp": 1,
+    "fitChi": 0
+  },
+
+  "spectral": {
+    "_comment": "Spectral / instrument settings.",
+    "spectralResolution": 65000,
+    "lineParamFile": "input/lines.txt",
+    "velStart": -400.0,
+    "velEnd": 400.0,
+    "obsFileType": "lsd_pol",
+    "polOut": "V",
+    "specType": "auto"
+  },
+
+  "observations": {
+    "_comment": "Reference epoch and list of observation files.",
+    "jDateRef": 2450000.0,
+    "files": [
+      {"path": "input/spot_forward_obs/obs_phase_0.000.lsd", "jdate": 2450000.00000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.050.lsd", "jdate": 2450000.05000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.120.lsd", "jdate": 2450000.12000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.180.lsd", "jdate": 2450000.18000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.250.lsd", "jdate": 2450000.25000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.330.lsd", "jdate": 2450000.33000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.410.lsd", "jdate": 2450000.41000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.480.lsd", "jdate": 2450000.48000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.550.lsd", "jdate": 2450000.55000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.650.lsd", "jdate": 2450000.65000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.720.lsd", "jdate": 2450000.72000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.800.lsd", "jdate": 2450000.80000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.880.lsd", "jdate": 2450000.88000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.920.lsd", "jdate": 2450000.92000, "vr": 0.0, "polchannel": "V"},
+      {"path": "input/spot_forward_obs/obs_phase_0.980.lsd", "jdate": 2450000.98000, "vr": 0.0, "polchannel": "V"}
+    ]
+  }
+}
