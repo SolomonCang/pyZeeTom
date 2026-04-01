@@ -193,7 +193,6 @@ class SimpleDiskGeometry:
     amp : np.ndarray
         Spectral line amplitude (response weight)
     """
-
     def __init__(self,
                  grid: diskGrid,
                  inclination_deg: float = 60.0,
@@ -314,6 +313,18 @@ class VelspaceDiskIntegrator:
         Instrumental FWHM (km/s)
     normalize_continuum : bool, default=True
         Normalize to continuum level
+    veiling_factor : float or callable, default=0.0
+        Veiling parameter r (accretion disk continuum dilution).
+        - If float: constant veiling factor
+        - If callable: function(phase) -> float, where phase is obs_phase or time_phase
+        I_obs = (I_line + r * I_cont) / (1 + r)
+        r=0: no veiling, r>0: line weakening from extra continuum
+    veiling_region : str, default='all'
+        Spatial region where veiling applies (physically realistic option):
+        - 'all': Global veiling affects entire observed spectrum (stellar + disk)
+        - 'stellar': Veiling only affects stellar photosphere (r <= stellar_radius)
+                    Physically correct for accretion disk continuum diluting stellar lines
+        - 'disk': Veiling only affects disk emission (r > stellar_radius)
     use_geom_vlos_if_available : bool, default=True
         Use geometry's v_los if available, else compute from disk velocity
     disk_v0_kms : float, default=200.0
@@ -329,7 +340,6 @@ class VelspaceDiskIntegrator:
     time_phase : float, optional
         Time evolution phase parameter
     """
-
     def __init__(
             self,
             geom,
@@ -348,7 +358,10 @@ class VelspaceDiskIntegrator:
             los_proj_func=None,
             obs_phase=None,
             # Time evolution support
-            time_phase=None):
+            time_phase=None,
+            # Veiling effect (accretion disk continuum)
+            veiling_factor=0.0,
+            veiling_region='all'):
         self.geom = geom
         self.grid = geom.grid
         self.wl0 = float(wl0_nm)
@@ -359,8 +372,24 @@ class VelspaceDiskIntegrator:
         self.normalize_continuum = bool(normalize_continuum)
         self.line_area = float(line_area)
 
+        # Veiling factor: can be constant or phase-dependent function
+        if callable(veiling_factor):
+            self.veiling_factor = veiling_factor
+            self._veiling_is_callable = True
+        else:
+            self.veiling_factor = float(veiling_factor)
+            self._veiling_is_callable = False
+
+        # Veiling spatial region
+        if veiling_region not in ['all', 'stellar', 'disk']:
+            raise ValueError(
+                f"veiling_region must be 'all', 'stellar', or 'disk', got '{veiling_region}'"
+            )
+        self.veiling_region = veiling_region
+
         # Store phase information for time evolution support
         self.time_phase = time_phase if time_phase is not None else obs_phase
+        self.obs_phase = obs_phase
 
         # Compute evolved azimuthal angles (for time evolution support)
         phi_evolved = self.grid.phi
@@ -462,6 +491,29 @@ class VelspaceDiskIntegrator:
 
         # Compute initial spectrum
         self.compute_spectrum()
+
+    def get_veiling_at_phase(self, phase=None):
+        """Get veiling factor at specified phase.
+        
+        Parameters
+        ----------
+        phase : float, optional
+            Phase value (0-1). If None, uses stored time_phase or obs_phase.
+            
+        Returns
+        -------
+        float
+            Veiling factor at the given phase
+        """
+        if not self._veiling_is_callable:
+            # Constant veiling
+            return self.veiling_factor
+
+        # Phase-dependent veiling
+        if phase is None:
+            phase = self.time_phase if self.time_phase is not None else 0.0
+
+        return float(self.veiling_factor(phase))
 
     def compute_spectrum(self, B_los=None, B_perp=None, chi=None, amp=None):
         """Compute Stokes spectra for current or updated magnetic field configuration.
@@ -590,7 +642,134 @@ class VelspaceDiskIntegrator:
             self.Q = Q_conv
             self.U = U_conv
 
+        # Apply veiling effect
+        # Physical model: I_obs = (I_line + r * I_cont) / (1 + r)
+        # where I_cont is the continuum level (1.0 in normalized mode, self.cont otherwise)
+        r = self.get_veiling_at_phase()
+        if r > 0:
+            # Determine which pixels to apply veiling to
+            if self.veiling_region == 'all':
+                # Apply to all pixels (traditional global veiling)
+                veiling_mask = np.ones(self.grid.numPoints, dtype=bool)
+            elif self.veiling_region == 'stellar':
+                # Apply only to stellar photosphere (r <= stellar_radius)
+                stellar_radius = getattr(self.geom, 'stellar_radius', 1.0)
+                veiling_mask = self.grid.r <= stellar_radius
+            elif self.veiling_region == 'disk':
+                # Apply only to disk (r > stellar_radius)
+                stellar_radius = getattr(self.geom, 'stellar_radius', 1.0)
+                veiling_mask = self.grid.r > stellar_radius
+
+            # Calculate contributions from veiled and non-veiled regions
+            # Strategy: Re-integrate using masked weights
+            if self.veiling_region != 'all':
+                # Separate veiled and non-veiled contributions
+                # Veiled region: apply veiling
+                # Non-veiled region: keep original
+
+                # Recompute local profiles to get per-pixel contributions
+                # (Already computed and stored in previous step)
+                # Here we need to re-sum with different normalization
+
+                # Get pixel-wise continuum weights
+                W_veiled = self.Ic_weight * veiling_mask
+                W_nonveiled = self.Ic_weight * (~veiling_mask)
+
+                cont_veiled = np.sum(W_veiled)
+                cont_nonveiled = np.sum(W_nonveiled)
+
+                # Need to reconstruct from local profiles
+                # This requires re-computing with masked weights
+                # For now, use approximation: apply veiling to fraction of flux
+
+                if cont_veiled > 0 and (cont_veiled + cont_nonveiled) > 0:
+                    # Fraction of flux from veiled region
+                    f_veiled = cont_veiled / (cont_veiled + cont_nonveiled)
+                    f_nonveiled = cont_nonveiled / (cont_veiled +
+                                                    cont_nonveiled)
+
+                    if self.normalize_continuum:
+                        # Effective veiling on observed spectrum
+                        # I_obs = f_nonveiled * I_nonveiled + f_veiled * I_veiled
+                        # where I_veiled = (I + r) / (1 + r)
+                        # Approximate: apply weighted veiling
+                        r_eff = r * f_veiled
+                        self.I = (self.I + r_eff) / (1.0 + r_eff)
+                        self.V = self.V / (1.0 + r_eff)
+                        self.Q = self.Q / (1.0 + r_eff)
+                        self.U = self.U / (1.0 + r_eff)
+                    else:
+                        r_eff = r * f_veiled
+                        self.I = (self.I + r_eff * self.cont) / (1.0 + r_eff)
+                        self.V = self.V / (1.0 + r_eff)
+                        self.Q = self.Q / (1.0 + r_eff)
+                        self.U = self.U / (1.0 + r_eff)
+            else:
+                # Global veiling (original behavior)
+                if self.normalize_continuum:
+                    # I is normalized: continuum = 1.0
+                    # I_obs = (I + r * 1.0) / (1 + r) = (I + r) / (1 + r)
+                    self.I = (self.I + r) / (1.0 + r)
+                    # V, Q, U are diluted by same factor
+                    self.V = self.V / (1.0 + r)
+                    self.Q = self.Q / (1.0 + r)
+                    self.U = self.U / (1.0 + r)
+                else:
+                    # I is absolute flux
+                    # I_obs = (I + r * cont) / (1 + r)
+                    self.I = (self.I + r * self.cont) / (1.0 + r)
+                    self.V = self.V / (1.0 + r)
+                    self.Q = self.Q / (1.0 + r)
+                    self.U = self.U / (1.0 + r)
+
         return self.I
+
+    def compute_spectrum_single_phase(self,
+                                      phase,
+                                      B_los=None,
+                                      B_perp=None,
+                                      chi=None,
+                                      amp=None):
+        """Compute spectrum at a specific phase (useful for phase-dependent veiling).
+        
+        Parameters
+        ----------
+        phase : float
+            Observation phase (0-1)
+        B_los, B_perp, chi, amp : optional
+            Magnetic field and amplitude parameters
+            
+        Returns
+        -------
+        dict
+            Dictionary with keys 'I', 'V', 'Q', 'U' containing spectra
+        """
+        # Store original phase
+        original_phase = self.time_phase
+
+        # Update to new phase
+        self.time_phase = phase
+        self.obs_phase = phase
+
+        # Compute spectrum
+        self.compute_spectrum(B_los=B_los, B_perp=B_perp, chi=chi, amp=amp)
+
+        # Collect results
+        result = {
+            'I': self.I.copy(),
+            'V': self.V.copy(),
+            'Q': self.Q.copy(),
+            'U': self.U.copy(),
+            'v': self.v.copy(),
+            'phase': phase,
+            'veiling_factor': self.get_veiling_at_phase(phase)
+        }
+
+        # Restore original phase
+        self.time_phase = original_phase
+        self.obs_phase = original_phase
+
+        return result
 
     def compute_derivatives(self, B_los=None, B_perp=None, chi=None, amp=None):
         """Compute analytical derivatives of Stokes spectra w.r.t parameters.

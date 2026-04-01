@@ -32,7 +32,7 @@ CONFIG = {
     # --- Data Input Configuration ---
     'params_file': 'input/intomog_ap149_update.txt',  # Parameter file path
     # 'model_dir': 'output/inverse_test',  # Directory containing spectrum files
-    'model_dir': '/Users/tianqi/Documents/Project/mag2acc/ap149/Ha_spec',
+    'model_dir': '/Users/tianqi/Documents/Project/mag2acc/DR Tau/OPT/int/Ha_spec',
     # Specify file list (optional)
     # None: Auto search (phase001.lsd, .s, .spec etc.)
     'file_list': None,

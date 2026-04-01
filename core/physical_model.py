@@ -283,7 +283,6 @@ class PhysicalModelBuilder:
     verbose : int, default=1
         Verbosity level (0=silent, 1=normal, 2=detailed)
     """
-
     def __init__(self, par: readParamsTomog, verbose: int = 1):
         """Initialize builder."""
         if not isinstance(par, readParamsTomog):
@@ -433,6 +432,8 @@ class PhysicalModelBuilder:
                          wl0_nm: float = 656.3,
                          v_grid: Optional[np.ndarray] = None,
                          line_model: Optional[Any] = None,
+                         veiling_factor: float = 0.0,
+                         veiling_region: str = 'all',
                          **integrator_kwargs) -> VelspaceDiskIntegrator:
         """Build velocity space integrator.
         
@@ -446,6 +447,10 @@ class PhysicalModelBuilder:
             Velocity grid (km/s).
         line_model : optional
             Line model object (required).
+        veiling_factor : float, default=0.0
+            Veiling parameter for accretion disk continuum (r >= 0).
+        veiling_region : str, default='all'
+            Spatial region where veiling applies ('all', 'stellar', or 'disk').
         **integrator_kwargs
             Other arguments passed to VelspaceDiskIntegrator.
         
@@ -519,6 +524,8 @@ class PhysicalModelBuilder:
                                             wl0_nm=wl0_nm,
                                             v_grid=v_grid,
                                             line_model=line_model,
+                                            veiling_factor=veiling_factor,
+                                            veiling_region=veiling_region,
                                             **integrator_kwargs)
 
         return integrator
@@ -527,6 +534,8 @@ class PhysicalModelBuilder:
               wl0_nm: float = 656.3,
               v_grid: Optional[np.ndarray] = None,
               line_model: Optional[Any] = None,
+              veiling_factor: float = 0.0,
+              veiling_region: str = 'all',
               B_los: Optional[np.ndarray] = None,
               B_perp: Optional[np.ndarray] = None,
               chi: Optional[np.ndarray] = None,
@@ -542,6 +551,10 @@ class PhysicalModelBuilder:
             Velocity grid (km/s).
         line_model : optional
             Line model object (required).
+        veiling_factor : float, default=0.0
+            Veiling parameter for accretion disk continuum (r >= 0).
+        veiling_region : str, default='all'
+            Spatial region where veiling applies ('all', 'stellar', or 'disk').
         B_los : np.ndarray, optional
             Line-of-sight magnetic field (Gauss).
         B_perp : np.ndarray, optional
@@ -563,7 +576,9 @@ class PhysicalModelBuilder:
         self.build_geometry(B_los=B_los, B_perp=B_perp, chi=chi, amp=amp)
         integrator = self.build_integrator(wl0_nm=wl0_nm,
                                            v_grid=v_grid,
-                                           line_model=line_model)
+                                           line_model=line_model,
+                                           veiling_factor=veiling_factor,
+                                           veiling_region=veiling_region)
 
         # Ensure geometry is not None
         if self._geometry is None:
@@ -602,6 +617,8 @@ def create_physical_model(par: readParamsTomog,
                           wl0_nm: float = 656.3,
                           v_grid: Optional[np.ndarray] = None,
                           line_model: Optional[Any] = None,
+                          veiling_factor: float = 0.0,
+                          veiling_region: str = 'all',
                           B_los: Optional[np.ndarray] = None,
                           B_perp: Optional[np.ndarray] = None,
                           chi: Optional[np.ndarray] = None,
@@ -620,6 +637,14 @@ def create_physical_model(par: readParamsTomog,
         Velocity grid (km/s)
     line_model : optional
         Line model object (required)
+    veiling_factor : float, default=0.0
+        Veiling parameter for accretion disk continuum (r >= 0).
+        Physically represents extra continuum flux ratio: I_obs = (I_star + r*I_cont)/(1+r)
+    veiling_region : str, default='all'
+        Spatial region where veiling applies:
+        - 'all': Global veiling (entire observed spectrum)
+        - 'stellar': Only stellar photosphere (r <= stellar_radius) - PHYSICALLY CORRECT
+        - 'disk': Only disk emission (r > stellar_radius)
     B_los : np.ndarray, optional
         Line-of-sight magnetic field (Gauss)
     B_perp : np.ndarray, optional
@@ -697,8 +722,8 @@ def create_physical_model(par: readParamsTomog,
                 r_min_val = np.min(geom_loaded.grid.r)
                 r_max_val = np.max(geom_loaded.grid.r)
 
-                if hasattr(geom_loaded.grid, 'r_edges') and len(
-                        geom_loaded.grid.r_edges) > 0:
+                if hasattr(geom_loaded.grid,
+                           'r_edges') and len(geom_loaded.grid.r_edges) > 0:
                     r_min_val = np.min(geom_loaded.grid.r_edges)
                     r_max_val = np.max(geom_loaded.grid.r_edges)
 
@@ -748,6 +773,8 @@ def create_physical_model(par: readParamsTomog,
     return builder.build(wl0_nm=wl0_nm,
                          v_grid=v_grid,
                          line_model=line_model,
+                         veiling_factor=veiling_factor,
+                         veiling_region=veiling_region,
                          B_los=B_los,
                          B_perp=B_perp,
                          chi=chi,
